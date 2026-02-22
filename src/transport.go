@@ -37,7 +37,10 @@ type Transport interface {
 // RichTransport is an optional extension for transports that support interactive buttons.
 type RichTransport interface {
 	Transport
+	// SendWithButtons sends a message with all buttons in a single row.
 	SendWithButtons(chatID string, text string, buttons []Button) error
+	// SendButtonMenu sends a message with one button per row (vertical menu).
+	SendButtonMenu(chatID string, text string, buttons []Button) error
 }
 
 // makeChatID builds a prefixed chatID string from transport name and local ID.

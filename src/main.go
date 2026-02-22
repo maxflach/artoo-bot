@@ -36,6 +36,7 @@ type Session struct {
 type ProjectOptions struct {
 	IsResearch bool
 	AutoReport bool
+	AgentStyle string // key: "general", "researcher", "engineer", "analyst", "writer"
 }
 
 // PendingProject holds state for a project being configured via Telegram buttons.
@@ -47,9 +48,45 @@ type PendingProject struct {
 	UserID      int64
 	ChatID      string
 	Model       string
-	Step        int // 1 = asking research?, 2 = asking auto-report?
+	Step        int // 1=research?, 2=auto-report?, 3=agent style?
 	IsResearch  bool
 	AutoReport  bool
+	AgentStyle  string
+}
+
+// agentStyleDef defines a named agent working style preset.
+type agentStyleDef struct {
+	Key         string
+	Label       string
+	Description string
+}
+
+// agentStyles lists the available agent style presets shown during project creation.
+var agentStyles = []agentStyleDef{
+	{"general", "General", "Balanced — handles any task without a strong bias. Be pragmatic and efficient."},
+	{"researcher", "Researcher", "Research-focused — thorough and methodical. Prioritise breadth, cite sources, verify facts from multiple sources, structure output with clear sections."},
+	{"engineer", "Engineer", "Engineering-focused — code first, prose second. Prefer working implementations over explanations. Write tests where appropriate. Be direct."},
+	{"analyst", "Analyst", "Data-driven and quantitative. Use tables, numbers, and metrics where possible. Challenge assumptions and surface insights clearly."},
+	{"writer", "Writer", "Writing-focused — clear prose and strong structure. Favour readability, logical flow, and precise language."},
+}
+
+// agentStyleButtons returns a slice of Buttons for the given callback prefix, one per style.
+func agentStyleButtons(prefix string) []Button {
+	buttons := make([]Button, len(agentStyles))
+	for i, s := range agentStyles {
+		buttons[i] = Button{Label: s.Label, Data: fmt.Sprintf("%s:%s", prefix, s.Key)}
+	}
+	return buttons
+}
+
+// agentStyleSection returns the ## Agent README section content for a given style key.
+func agentStyleSection(style string) string {
+	for _, s := range agentStyles {
+		if s.Key == style {
+			return fmt.Sprintf("\n## Agent\nStyle: **%s** — %s\n", s.Label, s.Description)
+		}
+	}
+	return ""
 }
 
 type Bot struct {
@@ -284,28 +321,12 @@ func (b *Bot) handleCommand(chatID string, sess *Session, text string) {
 		b.reply(chatID, "Conversation history cleared.")
 
 	case "workspace", "project":
-		if args == "" {
-			sess.mu.Lock()
-			ws, wd := sess.workspace, sess.workingDir
-			sess.mu.Unlock()
-			readme := readWorkspaceReadme(wd)
-			if readme != "" {
-				for _, line := range strings.Split(readme, "\n") {
-					if strings.HasPrefix(line, "# ") {
-						b.reply(chatID, fmt.Sprintf("Project: *%s* — %s", ws, strings.TrimPrefix(line, "# ")))
-						return
-					}
-				}
-			}
-			b.reply(chatID, fmt.Sprintf("Project: *%s*", ws))
-			return
-		}
-		if args == "list" {
+		if args == "" || args == "list" {
 			b.handleProjectList(chatID, sess)
 			return
 		}
 		if args == "update" || args == "edit" {
-			b.handleProjectUpdate(chatID, sess, "")
+			b.handleProjectUpdateButtons(chatID, sess)
 			return
 		}
 		if strings.HasPrefix(args, "update ") || strings.HasPrefix(args, "edit ") {
@@ -447,6 +468,23 @@ func (b *Bot) handleCommand(chatID string, sess *Session, text string) {
 			b.reply(chatID, "No wishes yet.")
 			return
 		}
+		if rt, localChatID, ok := b.richTransport(chatID); ok {
+			for _, w := range wishes {
+				status := "•"
+				if w.Done {
+					status = "✓"
+				}
+				text := fmt.Sprintf("%s *#%d* @%s\n_%s_", status, w.ID, w.Username, w.Message)
+				if !w.Done {
+					rt.SendWithButtons(localChatID, text, []Button{
+						{Label: "✓ Mark done", Data: fmt.Sprintf("wishdone:%d", w.ID)},
+					})
+				} else {
+					b.reply(chatID, text)
+				}
+			}
+			return
+		}
 		var sb strings.Builder
 		sb.WriteString("*Wishlist*\n\n")
 		for _, w := range wishes {
@@ -481,7 +519,6 @@ func projectDir(baseWD, name string) string {
 // handleProjectList lists all projects for the current user.
 func (b *Bot) handleProjectList(chatID string, sess *Session) {
 	baseWD := userWorkingDir(b.cfg.Backend.WorkingDir, sess.userID)
-
 	entries, err := os.ReadDir(baseWD)
 	if err != nil {
 		b.reply(chatID, "Could not read projects directory.")
@@ -492,35 +529,48 @@ func (b *Bot) handleProjectList(chatID string, sess *Session) {
 	activeWS := sess.workspace
 	sess.mu.Unlock()
 
-	var lines []string
+	type proj struct{ name, title string }
+	projects := []proj{{"global", "Global (default)"}}
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
 		name := e.Name()
-		marker := ""
-		if name == activeWS {
-			marker = " ◀ active"
-		}
+		title := name
 		dir := filepath.Join(baseWD, name)
-		title := ""
 		if readme := readWorkspaceReadme(dir); readme != "" {
 			for _, line := range strings.Split(readme, "\n") {
 				if strings.HasPrefix(line, "# ") {
-					title = " — " + strings.TrimPrefix(line, "# ")
+					title = strings.TrimPrefix(line, "# ")
 					break
 				}
 			}
 		}
-		lines = append(lines, fmt.Sprintf("• *%s*%s%s", name, title, marker))
+		projects = append(projects, proj{name, title})
 	}
 
-	globalMarker := ""
-	if activeWS == "global" {
-		globalMarker = " ◀ active"
+	if rt, localChatID, ok := b.richTransport(chatID); ok {
+		buttons := make([]Button, len(projects))
+		for i, p := range projects {
+			label := p.title
+			if p.name == activeWS {
+				label = "✓ " + label
+			}
+			buttons[i] = Button{Label: label, Data: "projswitch:" + p.name}
+		}
+		rt.SendButtonMenu(localChatID, "Switch to project:", buttons)
+		return
 	}
-	lines = append([]string{fmt.Sprintf("• *global* (default)%s", globalMarker)}, lines...)
 
+	// Text fallback.
+	var lines []string
+	for _, p := range projects {
+		marker := ""
+		if p.name == activeWS {
+			marker = " ◀ active"
+		}
+		lines = append(lines, fmt.Sprintf("• *%s*%s", p.name, marker))
+	}
 	b.reply(chatID, "*Projects:*\n"+strings.Join(lines, "\n"))
 }
 
@@ -615,6 +665,16 @@ func (b *Bot) startProjectSetup(chatID string, sess *Session, name, description,
 	)
 }
 
+// richTransport returns the RichTransport for the given chatID if the transport supports buttons.
+func (b *Bot) richTransport(chatID string) (RichTransport, string, bool) {
+	transportName, localChatID := splitChatID(chatID)
+	b.transportsMu.RLock()
+	tp := b.transports[transportName]
+	b.transportsMu.RUnlock()
+	rt, ok := tp.(RichTransport)
+	return rt, localChatID, ok
+}
+
 // generateWorkspaceReadme runs Claude to generate README content, then writes it to disk.
 func (b *Bot) generateWorkspaceReadme(chatID string, sess *Session, name, description string, opts *ProjectOptions) {
 	sess.mu.Lock()
@@ -630,8 +690,13 @@ func (b *Bot) generateWorkspaceReadme(chatID string, sess *Session, name, descri
 		return
 	}
 
+	content := response
+	if opts != nil && opts.AgentStyle != "" {
+		content = strings.TrimRight(content, "\n") + agentStyleSection(opts.AgentStyle)
+	}
+
 	readmePath := filepath.Join(wsDir, "README.md")
-	if err := os.WriteFile(readmePath, []byte(response), 0644); err != nil {
+	if err := os.WriteFile(readmePath, []byte(content), 0644); err != nil {
 		b.reply(chatID, fmt.Sprintf("README generated but failed to save: %v", err))
 		return
 	}
@@ -748,6 +813,75 @@ func (b *Bot) handleProjectUpdate(chatID string, sess *Session, instruction stri
 		return
 	}
 	b.reply(chatID, "README updated ✓")
+}
+
+// handleProjectUpdateButtons shows a button menu for updating parts of the current project.
+func (b *Bot) handleProjectUpdateButtons(chatID string, sess *Session) {
+	rt, localChatID, ok := b.richTransport(chatID)
+	if !ok {
+		b.handleProjectUpdate(chatID, sess, "")
+		return
+	}
+	sess.mu.Lock()
+	ws := sess.workspace
+	sess.mu.Unlock()
+	rt.SendButtonMenu(localChatID,
+		fmt.Sprintf("Update *%s* — what would you like to change?", ws),
+		[]Button{
+			{Label: "Improve README", Data: "projupdate:readme"},
+			{Label: "Change agent style", Data: "projupdate:style"},
+			{Label: "View schedules", Data: "projupdate:schedules"},
+		},
+	)
+}
+
+// handleProjectStyleUpdate replaces the ## Agent section in the current project README.
+func (b *Bot) handleProjectStyleUpdate(chatID string, sess *Session, style string) {
+	section := agentStyleSection(style)
+	if section == "" {
+		b.reply(chatID, "Unknown style.")
+		return
+	}
+
+	sess.mu.Lock()
+	wsDir := sess.workingDir
+	sess.mu.Unlock()
+
+	readmePath := filepath.Join(wsDir, "README.md")
+	raw, err := os.ReadFile(readmePath)
+	if err != nil {
+		b.reply(chatID, fmt.Sprintf("Could not read README: %v", err))
+		return
+	}
+	readme := string(raw)
+
+	// Replace existing ## Agent section or append.
+	const agentHeader = "\n## Agent\n"
+	if idx := strings.Index(readme, agentHeader); idx != -1 {
+		// Find the next ## section after ## Agent.
+		rest := readme[idx+len(agentHeader):]
+		if end := strings.Index(rest, "\n## "); end != -1 {
+			readme = readme[:idx] + section + rest[end:]
+		} else {
+			readme = readme[:idx] + section
+		}
+	} else {
+		readme = strings.TrimRight(readme, "\n") + section
+	}
+
+	if err := os.WriteFile(readmePath, []byte(readme), 0644); err != nil {
+		b.reply(chatID, fmt.Sprintf("Failed to save README: %v", err))
+		return
+	}
+
+	label := style
+	for _, s := range agentStyles {
+		if s.Key == style {
+			label = s.Label
+			break
+		}
+	}
+	b.reply(chatID, fmt.Sprintf("Agent style updated to *%s* ✓", label))
 }
 
 // readWorkspaceReadme returns the contents of README.md in the given directory, or "".
@@ -1544,6 +1678,23 @@ func (b *Bot) handleSkillsCommand(chatID string, sess *Session, args string) {
 	}
 
 	sort.Slice(skills, func(i, j int) bool { return skills[i].Name < skills[j].Name })
+
+	if rt, localChatID, ok := b.richTransport(chatID); ok {
+		buttons := make([]Button, len(skills))
+		for i, s := range skills {
+			desc := s.Description
+			if desc == "" {
+				desc = s.Type
+			}
+			buttons[i] = Button{
+				Label: fmt.Sprintf("/%s — %s", s.Name, desc),
+				Data:  "skillrun:" + s.Name,
+			}
+		}
+		rt.SendButtonMenu(localChatID, "*Skills:*", buttons)
+		return
+	}
+
 	var lines []string
 	for _, s := range skills {
 		desc := s.Description

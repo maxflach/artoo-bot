@@ -87,6 +87,24 @@ func (t *TelegramTransport) SendWithButtons(chatID string, text string, buttons 
 	return err
 }
 
+// SendButtonMenu implements RichTransport — sends a message with one button per row.
+func (t *TelegramTransport) SendButtonMenu(chatID string, text string, buttons []Button) error {
+	id, err := strconv.ParseInt(chatID, 10, 64)
+	if err != nil {
+		return fmt.Errorf("telegram: invalid chatID %q: %w", chatID, err)
+	}
+	rows := make([][]tgbotapi.InlineKeyboardButton, len(buttons))
+	for i, b := range buttons {
+		rows[i] = tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData(b.Label, b.Data))
+	}
+	keyboard := tgbotapi.NewInlineKeyboardMarkup(rows...)
+	msg := tgbotapi.NewMessage(id, text)
+	msg.ParseMode = "Markdown"
+	msg.ReplyMarkup = keyboard
+	_, err = t.api.Send(msg)
+	return err
+}
+
 // sendPhoto sends an image file as a Telegram photo (not a document).
 func (t *TelegramTransport) sendPhoto(chatID string, filePath string) error {
 	id, err := strconv.ParseInt(chatID, 10, 64)
@@ -212,17 +230,43 @@ func (t *TelegramTransport) handleUnknownUser(msg *tgbotapi.Message) {
 	t.Send(strconv.FormatInt(msg.Chat.ID, 10), "I don't recognise you yet. I've notified my owner — hang tight.")
 }
 
-// handleCallback processes Telegram inline keyboard button presses (approve/deny/delschedule).
+// handleCallback processes Telegram inline keyboard button presses.
 func (t *TelegramTransport) handleCallback(cb *tgbotapi.CallbackQuery) {
 	b := t.bot
 	t.api.Request(tgbotapi.NewCallback(cb.ID, ""))
 
+	data := cb.Data
+
+	// Callbacks available to all approved users (checked by session existence).
+	if strings.HasPrefix(data, "projsetup:") {
+		parts := strings.SplitN(strings.TrimPrefix(data, "projsetup:"), ":", 3)
+		if len(parts) == 3 {
+			t.handleProjectSetupCallback(cb, parts[0], parts[1], parts[2])
+		}
+		return
+	}
+	if strings.HasPrefix(data, "projswitch:") {
+		t.handleProjSwitchCallback(cb, strings.TrimPrefix(data, "projswitch:"))
+		return
+	}
+	if strings.HasPrefix(data, "projupdate:") {
+		t.handleProjUpdateCallback(cb, strings.TrimPrefix(data, "projupdate:"))
+		return
+	}
+	if strings.HasPrefix(data, "projstyleset:") {
+		t.handleProjStyleSetCallback(cb, strings.TrimPrefix(data, "projstyleset:"))
+		return
+	}
+	if strings.HasPrefix(data, "skillrun:") {
+		t.handleSkillRunCallback(cb, strings.TrimPrefix(data, "skillrun:"))
+		return
+	}
+
+	// Admin-only callbacks.
 	adminID := b.cfg.Telegram.AdminUserID
 	if cb.From.ID != adminID {
 		return
 	}
-
-	data := cb.Data
 	adminChatID := tgChatID(adminID)
 
 	if strings.HasPrefix(data, "approve:") {
@@ -253,14 +297,6 @@ func (t *TelegramTransport) handleCallback(cb *tgbotapi.CallbackQuery) {
 		b.reply(adminChatID, "❌ Request denied.")
 		b.reply(tgChatID(userID), "Sorry, access not granted.")
 
-	} else if strings.HasPrefix(data, "projsetup:") {
-		// projsetup:<token>:<field>:<value>
-		parts := strings.SplitN(strings.TrimPrefix(data, "projsetup:"), ":", 3)
-		if len(parts) == 3 {
-			t.handleProjectSetupCallback(cb, parts[0], parts[1], parts[2])
-		}
-		return
-
 	} else if strings.HasPrefix(data, "delschedule:") {
 		var scheduleID int64
 		fmt.Sscanf(strings.TrimPrefix(data, "delschedule:"), "%d", &scheduleID)
@@ -282,12 +318,90 @@ func (t *TelegramTransport) handleCallback(cb *tgbotapi.CallbackQuery) {
 		}
 		t.api.Request(tgbotapi.NewCallback(cb.ID, "Removed ✓"))
 		return
+
+	} else if strings.HasPrefix(data, "wishdone:") {
+		var id int64
+		fmt.Sscanf(strings.TrimPrefix(data, "wishdone:"), "%d", &id)
+		b.mem.markWishDone(id)
+		if cb.Message != nil {
+			edit := tgbotapi.NewEditMessageText(cb.Message.Chat.ID, cb.Message.MessageID,
+				cb.Message.Text+"\n\n~done~")
+			edit.ParseMode = "Markdown"
+			t.api.Request(edit)
+			t.api.Request(tgbotapi.NewEditMessageReplyMarkup(cb.Message.Chat.ID, cb.Message.MessageID, tgbotapi.InlineKeyboardMarkup{}))
+		}
+		t.api.Request(tgbotapi.NewCallback(cb.ID, "Marked done ✓"))
+		return
 	}
 
-	// Remove buttons from original message (for approve/deny)
+	_ = adminChatID
+
+	// Remove buttons from original message (for approve/deny).
 	if cb.Message != nil {
 		edit := tgbotapi.NewEditMessageReplyMarkup(adminID, cb.Message.MessageID, tgbotapi.InlineKeyboardMarkup{})
 		t.api.Request(edit)
+	}
+}
+
+func (t *TelegramTransport) clearButtons(cb *tgbotapi.CallbackQuery) {
+	if cb.Message != nil {
+		t.api.Request(tgbotapi.NewEditMessageReplyMarkup(
+			cb.Message.Chat.ID, cb.Message.MessageID, tgbotapi.InlineKeyboardMarkup{}))
+	}
+}
+
+func (t *TelegramTransport) handleProjSwitchCallback(cb *tgbotapi.CallbackQuery, name string) {
+	b := t.bot
+	sess := b.getSession(cb.From.ID)
+	if sess == nil {
+		return
+	}
+	t.clearButtons(cb)
+	b.handleWorkspace(tgChatID(cb.From.ID), sess, name)
+}
+
+func (t *TelegramTransport) handleProjUpdateCallback(cb *tgbotapi.CallbackQuery, field string) {
+	b := t.bot
+	sess := b.getSession(cb.From.ID)
+	if sess == nil {
+		return
+	}
+	chatID := tgChatID(cb.From.ID)
+	_, localChatID := splitChatID(chatID)
+	t.clearButtons(cb)
+
+	switch field {
+	case "readme":
+		go b.handleProjectUpdate(chatID, sess, "")
+	case "style":
+		t.SendButtonMenu(localChatID, "Choose a new agent style:", agentStyleButtons("projstyleset"))
+	case "schedules":
+		b.handleScheduleList(chatID, sess)
+	}
+}
+
+func (t *TelegramTransport) handleProjStyleSetCallback(cb *tgbotapi.CallbackQuery, style string) {
+	b := t.bot
+	sess := b.getSession(cb.From.ID)
+	if sess == nil {
+		return
+	}
+	t.clearButtons(cb)
+	go b.handleProjectStyleUpdate(tgChatID(cb.From.ID), sess, style)
+}
+
+func (t *TelegramTransport) handleSkillRunCallback(cb *tgbotapi.CallbackQuery, skillName string) {
+	b := t.bot
+	sess := b.getSession(cb.From.ID)
+	if sess == nil {
+		return
+	}
+	t.clearButtons(cb)
+	b.skillsMu.RLock()
+	skill, ok := b.skills[skillName]
+	b.skillsMu.RUnlock()
+	if ok {
+		go b.runSkill(tgChatID(cb.From.ID), sess, skill, "")
 	}
 }
 
@@ -434,6 +548,12 @@ func (t *TelegramTransport) handleProjectSetupCallback(cb *tgbotapi.CallbackQuer
 
 	case "report":
 		pending.AutoReport = value == "yes"
+		pending.Step = 3
+		_, localChatID := splitChatID(pending.ChatID)
+		t.SendButtonMenu(localChatID, "Choose an agent style for this project:", agentStyleButtons(fmt.Sprintf("projsetup:%s:style", token)))
+
+	case "style":
+		pending.AgentStyle = value
 		b.pendingProjectsMu.Lock()
 		delete(b.pendingProjects, token)
 		b.pendingProjectsMu.Unlock()
@@ -447,7 +567,7 @@ func (t *TelegramTransport) handleProjectSetupCallback(cb *tgbotapi.CallbackQuer
 		sess.mu.Lock()
 		sess.workingDir = pending.WorkingDir
 		sess.mu.Unlock()
-		opts := &ProjectOptions{IsResearch: pending.IsResearch, AutoReport: pending.AutoReport}
+		opts := &ProjectOptions{IsResearch: pending.IsResearch, AutoReport: pending.AutoReport, AgentStyle: pending.AgentStyle}
 		go b.generateWorkspaceReadme(pending.ChatID, sess, pending.Name, pending.Description, opts)
 	}
 }

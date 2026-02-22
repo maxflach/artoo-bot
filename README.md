@@ -78,16 +78,6 @@ Any CLI that accepts a prompt and returns text output can work — configure it 
 **Find your Telegram user ID:**
 Message [@userinfobot](https://t.me/userinfobot) — it replies with your numeric user ID.
 
-### 4. Go 1.21+
-
-```bash
-# macOS
-brew install go
-
-# Linux
-# See https://go.dev/dl/
-```
-
 ---
 
 ## Installation
@@ -107,6 +97,25 @@ artoo --setup
 ```
 
 ### Or build from source
+
+Requires Go 1.21+.
+
+```bash
+# macOS
+brew install go
+
+# Linux (replace the version number with the latest from https://go.dev/dl/)
+curl -OL https://go.dev/dl/go1.24.0.linux-amd64.tar.gz
+sudo rm -rf /usr/local/go
+sudo tar -C /usr/local -xzf go1.24.0.linux-amd64.tar.gz
+echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.profile
+source ~/.profile
+
+# Linux (alternative, via snap)
+sudo snap install go --classic
+```
+
+Then clone and build:
 
 ```bash
 git clone https://github.com/maxflach/artoo-bot

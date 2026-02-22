@@ -558,7 +558,9 @@ func (b *Bot) handleProjectList(chatID string, sess *Session) {
 			}
 			buttons[i] = Button{Label: label, Data: "projswitch:" + p.name}
 		}
-		rt.SendButtonMenu(localChatID, "Switch to project:", buttons)
+		rt.SendButtonMenu(localChatID,
+			"*Switch project*\nEach project has its own memory, files, and context — switching changes what I know and where I work.",
+			buttons)
 		return
 	}
 
@@ -571,7 +573,7 @@ func (b *Bot) handleProjectList(chatID string, sess *Session) {
 		}
 		lines = append(lines, fmt.Sprintf("• *%s*%s", p.name, marker))
 	}
-	b.reply(chatID, "*Projects:*\n"+strings.Join(lines, "\n"))
+	b.reply(chatID, "*Projects* — each has its own memory, files, and context:\n"+strings.Join(lines, "\n"))
 }
 
 // handleWorkspace switches to (or creates) a named workspace.
@@ -1761,17 +1763,19 @@ func (b *Bot) helpText() string {
 			"/new — fresh start (clear history + reset to global)\n"+
 			"/clear — clear conversation history only\n\n"+
 			"*Projects*\n"+
-			"/project — show current project\n"+
-			"/project list — list all projects\n"+
+			"Each project is a separate context: its own directory, README, memory, files, and schedules. "+
+			"Switching projects changes what the AI knows and where it works — memories from one project don't bleed into another. "+
+			"Use _global_ for general tasks with no project context.\n\n"+
+			"/project — list projects and switch\n"+
 			"/project <name> — switch to (or create) a project\n"+
 			"/project <name> | <description> — create project with README\n"+
 			"/project update — improve current project README\n"+
 			"/project update <instruction> — update README with specific changes\n"+
 			"Send a file → saved to project + extracted as markdown memory\n\n"+
 			"*Memory*\n"+
-			"/memory — show recent memories\n"+
-			"/remember <fact> — save to current workspace memory\n"+
-			"/remember --global <fact> — save to global memory\n"+
+			"/memory — show memories for the current project\n"+
+			"/remember <fact> — save to current project memory\n"+
+			"/remember --global <fact> — save to global memory (available in all projects)\n"+
 			"/files — show recently created files\n\n"+
 			"*Model*\n"+
 			"/model — show active model\n"+

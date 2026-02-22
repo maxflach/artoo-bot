@@ -80,9 +80,13 @@ func newMemoryStore() (*MemoryStore, error) {
 		`ALTER TABLE schedules ADD COLUMN chat_id INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE schedules ADD COLUMN one_shot    INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE schedules ADD COLUMN working_dir TEXT    NOT NULL DEFAULT ''`,
+		// chat_id_str stores transport-prefixed chatID (e.g. "tg:123"). Added in v0.6.
+		`ALTER TABLE schedules ADD COLUMN chat_id_str TEXT NOT NULL DEFAULT ''`,
 	} {
 		db.Exec(m)
 	}
+	// Migrate existing schedules: populate chat_id_str from legacy integer chat_id.
+	db.Exec(`UPDATE schedules SET chat_id_str = 'tg:' || CAST(chat_id AS TEXT) WHERE chat_id_str = '' AND chat_id != 0`)
 
 	// Migrate workspaces table: old schema has `name TEXT PRIMARY KEY` (no user_id).
 	// Recreate with user_id if needed.
@@ -332,7 +336,7 @@ func (m *MemoryStore) listFiles(userID int64, workspace string) string {
 type Schedule struct {
 	ID         int64
 	UserID     int64
-	ChatID     int64
+	ChatID     string // transport-prefixed chatID, e.g. "tg:123456789"
 	Name       string
 	Schedule   string
 	Prompt     string
@@ -343,67 +347,64 @@ type Schedule struct {
 	LastRun    *time.Time
 }
 
-func (m *MemoryStore) addSchedule(userID, chatID int64, name, schedule, prompt, workspace, workingDir string, oneShot bool) error {
+func (m *MemoryStore) addSchedule(userID int64, chatID string, name, schedule, prompt, workspace, workingDir string, oneShot bool) error {
 	oneShotInt := 0
 	if oneShot {
 		oneShotInt = 1
 	}
 	_, err := m.db.Exec(
-		"INSERT INTO schedules (user_id, chat_id, name, schedule, prompt, workspace, working_dir, one_shot) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+		"INSERT INTO schedules (user_id, chat_id, chat_id_str, name, schedule, prompt, workspace, working_dir, one_shot) VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?)",
 		userID, chatID, name, schedule, prompt, workspace, workingDir, oneShotInt,
 	)
 	return err
 }
 
-// listAllSchedules returns all enabled schedules (used by cron runner).
-func (m *MemoryStore) listAllSchedules() ([]Schedule, error) {
-	rows, err := m.db.Query(
-		"SELECT id, user_id, chat_id, name, schedule, prompt, workspace, working_dir, one_shot, enabled, last_run FROM schedules ORDER BY id",
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
+// scanSchedules is the shared scan logic for schedule query results.
+// It reads chat_id_str with a fallback to the legacy integer chat_id column.
+func scanSchedules(rows *sql.Rows) ([]Schedule, error) {
 	var schedules []Schedule
 	for rows.Next() {
 		var s Schedule
 		var lastRun sql.NullTime
-		if err := rows.Scan(&s.ID, &s.UserID, &s.ChatID, &s.Name, &s.Schedule, &s.Prompt, &s.Workspace, &s.WorkingDir, &s.OneShot, &s.Enabled, &lastRun); err != nil {
+		var legacyChatID int64
+		if err := rows.Scan(&s.ID, &s.UserID, &legacyChatID, &s.ChatID, &s.Name, &s.Schedule, &s.Prompt, &s.Workspace, &s.WorkingDir, &s.OneShot, &s.Enabled, &lastRun); err != nil {
 			continue
+		}
+		// chat_id_str is already populated by migration; this is a final safety net.
+		if s.ChatID == "" && legacyChatID != 0 {
+			s.ChatID = fmt.Sprintf("tg:%d", legacyChatID)
 		}
 		if lastRun.Valid {
 			s.LastRun = &lastRun.Time
 		}
 		schedules = append(schedules, s)
 	}
-	return schedules, nil
+	return schedules, rows.Err()
+}
+
+// listAllSchedules returns all enabled schedules (used by cron runner).
+func (m *MemoryStore) listAllSchedules() ([]Schedule, error) {
+	rows, err := m.db.Query(
+		"SELECT id, user_id, chat_id, chat_id_str, name, schedule, prompt, workspace, working_dir, one_shot, enabled, last_run FROM schedules ORDER BY id",
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanSchedules(rows)
 }
 
 // listSchedulesForUser returns schedules belonging to a specific user (used by /schedules command).
 func (m *MemoryStore) listSchedulesForUser(userID int64) ([]Schedule, error) {
 	rows, err := m.db.Query(
-		"SELECT id, user_id, chat_id, name, schedule, prompt, workspace, working_dir, one_shot, enabled, last_run FROM schedules WHERE user_id = ? ORDER BY id",
+		"SELECT id, user_id, chat_id, chat_id_str, name, schedule, prompt, workspace, working_dir, one_shot, enabled, last_run FROM schedules WHERE user_id = ? ORDER BY id",
 		userID,
 	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-
-	var schedules []Schedule
-	for rows.Next() {
-		var s Schedule
-		var lastRun sql.NullTime
-		if err := rows.Scan(&s.ID, &s.UserID, &s.ChatID, &s.Name, &s.Schedule, &s.Prompt, &s.Workspace, &s.WorkingDir, &s.OneShot, &s.Enabled, &lastRun); err != nil {
-			continue
-		}
-		if lastRun.Valid {
-			s.LastRun = &lastRun.Time
-		}
-		schedules = append(schedules, s)
-	}
-	return schedules, nil
+	return scanSchedules(rows)
 }
 
 func (m *MemoryStore) deleteSchedule(userID, id int64) error {

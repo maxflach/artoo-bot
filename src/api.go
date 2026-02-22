@@ -67,6 +67,14 @@ func (b *Bot) startAPIServer() {
 		fmt.Fprintf(w, swaggerUIHTML, b.cfg.Persona.Name)
 	})
 
+	// Register WebChat routes if the transport is configured.
+	b.transportsMu.RLock()
+	if wc, ok := b.transports["wc"].(*WebChatTransport); ok {
+		wc.RegisterRoutes(mux)
+		log.Printf("webchat: chat UI available at :%d/chat", port)
+	}
+	b.transportsMu.RUnlock()
+
 	addr := fmt.Sprintf(":%d", port)
 	log.Printf("api: listening on %s", addr)
 	go func() {
@@ -121,15 +129,15 @@ func (b *Bot) apiSend(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusBadRequest, "text is required")
 		return
 	}
-	chatID := body.UserID
-	if chatID == 0 {
-		chatID = b.cfg.Telegram.AdminUserID
+	userID := body.UserID
+	if userID == 0 {
+		userID = b.cfg.Telegram.AdminUserID
 	}
-	if chatID == 0 {
+	if userID == 0 {
 		apiError(w, http.StatusBadRequest, "user_id required (no admin configured)")
 		return
 	}
-	b.reply(chatID, body.Text)
+	b.reply(b.chatIDForUser(userID), body.Text)
 	apiJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -176,7 +184,8 @@ func (b *Bot) apiRun(w http.ResponseWriter, r *http.Request) {
 	// Acknowledge immediately, run task in background
 	apiJSON(w, http.StatusAccepted, map[string]string{"status": "queued"})
 
-	go b.runScheduledTask(0, userID, sess.chatID, ws, wd, body.Prompt)
+	chatID := b.chatIDForUser(userID)
+	go b.runScheduledTask(0, userID, chatID, ws, wd, body.Prompt)
 	_ = model
 }
 

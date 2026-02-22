@@ -11,8 +11,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
 const maxMsgLen = 4096
@@ -27,7 +25,7 @@ type Message struct {
 type Session struct {
 	mu         sync.Mutex
 	userID     int64
-	chatID     int64
+	chatID     string // transport-prefixed, e.g. "tg:123456789"
 	workingDir string
 	workspace  string
 	model      string // session-level model override; "" means use workspace or default
@@ -35,26 +33,25 @@ type Session struct {
 }
 
 type Bot struct {
-	cfg        *Config
-	api        *tgbotapi.BotAPI
-	allowedIDs map[int64]bool
-	mem        *MemoryStore
-	cron       *CronRunner
-	sessionsMu sync.RWMutex
-	sessions   map[int64]*Session
-	skillsMu   sync.RWMutex
-	skills     map[string]*Skill
-	secretKey  []byte
+	cfg          *Config
+	transports   map[string]Transport
+	transportsMu sync.RWMutex
+	allowedIDs   map[int64]bool
+	mem          *MemoryStore
+	cron         *CronRunner
+	sessionsMu   sync.RWMutex
+	sessions     map[int64]*Session
+	skillsMu     sync.RWMutex
+	skills       map[string]*Skill
+	secretKey    []byte
 }
 
 func newBot(cfg *Config) (*Bot, error) {
-	api, err := tgbotapi.NewBotAPI(cfg.Telegram.Token)
-	if err != nil {
-		return nil, err
-	}
-
 	allowed := make(map[int64]bool)
 	for _, id := range cfg.Telegram.AllowedUserIDs {
+		allowed[id] = true
+	}
+	for _, id := range cfg.Discord.AllowedUserIDs {
 		allowed[id] = true
 	}
 
@@ -64,15 +61,13 @@ func newBot(cfg *Config) (*Bot, error) {
 	}
 
 	// Collect all allowed user IDs: config + DB-approved users
-	allUserIDs := make([]int64, len(cfg.Telegram.AllowedUserIDs))
-	copy(allUserIDs, cfg.Telegram.AllowedUserIDs)
+	allUserIDs := make([]int64, 0, len(cfg.Telegram.AllowedUserIDs)+len(cfg.Discord.AllowedUserIDs))
+	allUserIDs = append(allUserIDs, cfg.Telegram.AllowedUserIDs...)
+	allUserIDs = append(allUserIDs, cfg.Discord.AllowedUserIDs...)
 	for _, u := range mem.listApprovedUsers() {
 		allUserIDs = append(allUserIDs, u.UserID)
 	}
 
-	// Eagerly initialize one session per allowed user.
-	// Each user gets their own working directory under the configured base.
-	// Restore last active workspace from DB if available.
 	sessions := make(map[int64]*Session, len(allUserIDs))
 	for _, id := range allUserIDs {
 		sessions[id] = newSession(id, cfg.Backend.WorkingDir, mem)
@@ -85,7 +80,7 @@ func newBot(cfg *Config) (*Bot, error) {
 
 	b := &Bot{
 		cfg:        cfg,
-		api:        api,
+		transports: make(map[string]Transport),
 		allowedIDs: allowed,
 		mem:        mem,
 		sessions:   sessions,
@@ -93,6 +88,30 @@ func newBot(cfg *Config) (*Bot, error) {
 	}
 	b.cron = newCronRunner(b)
 	b.skills = loadSkills(skillPaths(""))
+
+	// Initialize transports.
+	if cfg.Telegram.Token != "" {
+		tg, err := newTelegramTransport(b)
+		if err != nil {
+			return nil, fmt.Errorf("telegram: %w", err)
+		}
+		b.transports["tg"] = tg
+	}
+	if cfg.Discord.Token != "" {
+		dc, err := newDiscordTransport(b)
+		if err != nil {
+			return nil, fmt.Errorf("discord: %w", err)
+		}
+		b.transports["dc"] = dc
+	}
+	if cfg.WebChat.Enabled {
+		b.transports["wc"] = newWebChatTransport(b)
+	}
+
+	if len(b.transports) == 0 {
+		return nil, fmt.Errorf("no transports configured (set telegram.token, discord.token, or webchat.enabled)")
+	}
+
 	return b, nil
 }
 
@@ -113,7 +132,7 @@ func newSession(id int64, baseDir string, mem *MemoryStore) *Session {
 	}
 	return &Session{
 		userID:     id,
-		chatID:     id,
+		chatID:     tgChatID(id), // default to Telegram DM; updated on first message
 		workingDir: wd,
 		workspace:  ws,
 	}
@@ -135,66 +154,80 @@ func (b *Bot) addSession(userID int64) *Session {
 	return sess
 }
 
-func (b *Bot) run() {
-	log.Printf("%s online (@%s)", b.cfg.Persona.Name, b.api.Self.UserName)
+// isAdmin returns true if userID is a configured admin across any transport.
+func (b *Bot) isAdmin(userID int64) bool {
+	if b.cfg.Telegram.AdminUserID != 0 && userID == b.cfg.Telegram.AdminUserID {
+		return true
+	}
+	if b.cfg.Discord.AdminUserID != 0 && userID == b.cfg.Discord.AdminUserID {
+		return true
+	}
+	return false
+}
 
+// chatIDForUser returns the active chatID for a userID, falling back to Telegram DM.
+func (b *Bot) chatIDForUser(userID int64) string {
+	if sess := b.getSession(userID); sess != nil {
+		sess.mu.Lock()
+		cid := sess.chatID
+		sess.mu.Unlock()
+		if cid != "" {
+			return cid
+		}
+	}
+	return tgChatID(userID)
+}
+
+func (b *Bot) run() {
 	b.cron.start()
 	defer b.cron.stop()
 
 	b.startAPIServer()
 
-
-	u := tgbotapi.NewUpdate(0)
-	u.Timeout = 60
-	updates := b.api.GetUpdatesChan(u)
-
-	for update := range updates {
-		if update.CallbackQuery != nil {
-			go b.handleCallback(update.CallbackQuery)
-			continue
-		}
-		if update.Message == nil {
-			continue
-		}
-		go b.handleMessage(update.Message)
+	var wg sync.WaitGroup
+	b.transportsMu.RLock()
+	for _, tp := range b.transports {
+		tp := tp
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := tp.Start(b.handleIncomingMessage); err != nil {
+				log.Printf("transport %s stopped: %v", tp.Name(), err)
+			}
+		}()
 	}
+	b.transportsMu.RUnlock()
+
+	wg.Wait()
 }
 
-func (b *Bot) handleMessage(msg *tgbotapi.Message) {
-	sess := b.getSession(msg.From.ID)
+// handleIncomingMessage is the central dispatcher for all incoming messages.
+func (b *Bot) handleIncomingMessage(msg IncomingMessage) {
+	sess := b.getSession(msg.UserID)
 	if sess == nil {
-		b.handleUnknownUser(msg)
+		// Unknown user not handled by the transport — silently ignore.
 		return
 	}
 
 	sess.mu.Lock()
-	sess.chatID = msg.Chat.ID
+	sess.chatID = msg.ChatID
 	sess.mu.Unlock()
-
-	// Handle file/document uploads
-	if msg.Document != nil {
-		go b.handleFileUpload(msg.Chat.ID, sess, msg.Document)
-		return
-	}
 
 	text := strings.TrimSpace(msg.Text)
 	if text == "" {
 		return
 	}
 
-	// All /commands are intercepted here — they never reach Claude.
 	if strings.HasPrefix(text, "/") {
-		b.handleCommand(msg.Chat.ID, sess, text)
+		b.handleCommand(msg.ChatID, sess, text)
 		return
 	}
 
-	// Plain message → Claude
-	b.runUserMessage(msg.Chat.ID, sess, text)
+	b.runUserMessage(msg.ChatID, sess, text)
 }
 
 // handleCommand dispatches all /commands. Unknown commands get an error, not Claude.
-func (b *Bot) handleCommand(chatID int64, sess *Session, text string) {
-	// Split into command name and args (e.g. "/model sonnet" → "model", "sonnet")
+func (b *Bot) handleCommand(chatID string, sess *Session, text string) {
 	parts := strings.SplitN(text, " ", 2)
 	cmd := strings.ToLower(strings.TrimPrefix(parts[0], "/"))
 	// Strip @botname suffix (e.g. /help@mybot)
@@ -211,7 +244,6 @@ func (b *Bot) handleCommand(chatID int64, sess *Session, text string) {
 		b.reply(chatID, b.helpText())
 
 	case "new":
-		// Fresh session: clear history and reset to global workspace
 		sess.mu.Lock()
 		sess.history = nil
 		sess.workspace = "global"
@@ -245,12 +277,10 @@ func (b *Bot) handleCommand(chatID int64, sess *Session, text string) {
 			b.reply(chatID, fmt.Sprintf("Project: *%s*", ws))
 			return
 		}
-		// /project list — show all projects
 		if args == "list" {
 			b.handleProjectList(chatID, sess)
 			return
 		}
-		// /project update — open README for editing via Claude
 		if args == "update" || args == "edit" {
 			b.handleProjectUpdate(chatID, sess, "")
 			return
@@ -326,7 +356,7 @@ func (b *Bot) handleCommand(chatID int64, sess *Session, text string) {
 		b.handleScheduleDelete(chatID, sess, args)
 
 	case "apikey", "apikeys":
-		if sess.userID != b.cfg.Telegram.AdminUserID {
+		if !b.isAdmin(sess.userID) {
 			b.reply(chatID, "Only the admin can manage API keys.")
 			return
 		}
@@ -359,7 +389,7 @@ func projectDir(baseWD, name string) string {
 }
 
 // handleProjectList lists all projects for the current user.
-func (b *Bot) handleProjectList(chatID int64, sess *Session) {
+func (b *Bot) handleProjectList(chatID string, sess *Session) {
 	baseWD := userWorkingDir(b.cfg.Backend.WorkingDir, sess.userID)
 
 	entries, err := os.ReadDir(baseWD)
@@ -382,7 +412,6 @@ func (b *Bot) handleProjectList(chatID int64, sess *Session) {
 		if name == activeWS {
 			marker = " ◀ active"
 		}
-		// Check for README title
 		dir := filepath.Join(baseWD, name)
 		title := ""
 		if readme := readWorkspaceReadme(dir); readme != "" {
@@ -396,7 +425,6 @@ func (b *Bot) handleProjectList(chatID int64, sess *Session) {
 		lines = append(lines, fmt.Sprintf("• *%s*%s%s", name, title, marker))
 	}
 
-	// Always include global
 	globalMarker := ""
 	if activeWS == "global" {
 		globalMarker = " ◀ active"
@@ -407,10 +435,7 @@ func (b *Bot) handleProjectList(chatID int64, sess *Session) {
 }
 
 // handleWorkspace switches to (or creates) a named workspace.
-// args can be:
-//   - "name"               — switch to existing workspace
-//   - "name | description" — create new workspace and generate README
-func (b *Bot) handleWorkspace(chatID int64, sess *Session, args string) {
+func (b *Bot) handleWorkspace(chatID string, sess *Session, args string) {
 	parts := strings.SplitN(args, "|", 2)
 	name := strings.TrimSpace(parts[0])
 	description := ""
@@ -420,7 +445,6 @@ func (b *Bot) handleWorkspace(chatID int64, sess *Session, args string) {
 
 	sess.mu.Lock()
 	baseWD := sess.workingDir
-	// If already in a named workspace, base is its parent (the user's root dir)
 	if sess.workspace != "global" {
 		baseWD = filepath.Dir(sess.workingDir)
 	}
@@ -441,7 +465,7 @@ func (b *Bot) handleWorkspace(chatID int64, sess *Session, args string) {
 	sess.workspace = name
 	sess.workingDir = wsDir
 	sess.model = ""
-	sess.history = nil // fresh history for new workspace context
+	sess.history = nil
 	sess.mu.Unlock()
 
 	b.mem.saveUserState(sess.userID, name, wsDir)
@@ -464,7 +488,7 @@ func (b *Bot) handleWorkspace(chatID int64, sess *Session, args string) {
 }
 
 // generateWorkspaceReadme runs Claude to generate README content, then writes it to disk.
-func (b *Bot) generateWorkspaceReadme(chatID int64, sess *Session, name, description string) {
+func (b *Bot) generateWorkspaceReadme(chatID string, sess *Session, name, description string) {
 	sess.mu.Lock()
 	wsDir := sess.workingDir
 	model := b.activeModelForSession(sess)
@@ -510,7 +534,6 @@ Return ONLY the markdown content, no explanations.`,
 		return
 	}
 
-	// Write the README to disk ourselves — Claude returns the content, we save it
 	readmePath := filepath.Join(wsDir, "README.md")
 	if err := os.WriteFile(readmePath, []byte(response), 0644); err != nil {
 		b.reply(chatID, fmt.Sprintf("README generated but failed to save: %v", err))
@@ -520,8 +543,8 @@ Return ONLY the markdown content, no explanations.`,
 	b.reply(chatID, fmt.Sprintf("Project *%s* ready ✓", name))
 }
 
-// handleProjectUpdate runs Claude to update/improve the workspace README, then writes it to disk.
-func (b *Bot) handleProjectUpdate(chatID int64, sess *Session, instruction string) {
+// handleProjectUpdate runs Claude to update the workspace README, then writes it to disk.
+func (b *Bot) handleProjectUpdate(chatID string, sess *Session, instruction string) {
 	sess.mu.Lock()
 	wsDir := sess.workingDir
 	ws := sess.workspace
@@ -581,22 +604,29 @@ func nextAck() string {
 }
 
 // runUserMessage handles plain text messages sent to Claude.
-func (b *Bot) runUserMessage(chatID int64, sess *Session, text string) {
-	// Keep typing indicator alive while Claude works (Telegram expires it every 5s)
+func (b *Bot) runUserMessage(chatID string, sess *Session, text string) {
+	transportName, localChatID := splitChatID(chatID)
+
+	// Keep typing indicator alive while Claude works.
 	stopTyping := make(chan struct{})
 	go func() {
+		b.transportsMu.RLock()
+		tp := b.transports[transportName]
+		b.transportsMu.RUnlock()
 		for {
 			select {
 			case <-stopTyping:
 				return
 			default:
-				b.api.Send(tgbotapi.NewChatAction(chatID, tgbotapi.ChatTyping))
+				if tp != nil {
+					tp.SendTyping(localChatID)
+				}
 				time.Sleep(4 * time.Second)
 			}
 		}
 	}()
 
-	// Snapshot session state — release lock before slow Claude call
+	// Snapshot session state — release lock before slow Claude call.
 	sess.mu.Lock()
 	wd := sess.workingDir
 	ws := sess.workspace
@@ -605,7 +635,6 @@ func (b *Bot) runUserMessage(chatID int64, sess *Session, text string) {
 	copy(hist, sess.history)
 	sess.mu.Unlock()
 
-	// Send an immediate ack so the user knows we're working
 	ack := "_" + nextAck() + "_"
 	if ws != "global" {
 		ack = fmt.Sprintf("_[%s] %s_", ws, nextAck())
@@ -626,7 +655,7 @@ func (b *Bot) runUserMessage(chatID int64, sess *Session, text string) {
 	}
 
 	for _, path := range newFiles(wd, before) {
-		b.sendFile(chatID, path)
+		b.sendFileAuto(chatID, path)
 		if info, err := os.Stat(path); err == nil {
 			b.mem.recordFile(sess.userID, ws, filepath.Base(path), path, info.Size())
 		}
@@ -644,8 +673,7 @@ func (b *Bot) runUserMessage(chatID int64, sess *Session, text string) {
 	})
 }
 
-func (b *Bot) handleScheduleAdd(chatID int64, sess *Session, args string) {
-	// Format: /schedule <name> | <when> | <prompt>
+func (b *Bot) handleScheduleAdd(chatID string, sess *Session, args string) {
 	parts := strings.SplitN(args, "|", 3)
 	if len(parts) != 3 {
 		b.reply(chatID, "Usage: `/schedule <name> | <when> | <prompt>`\n\nExamples:\n`/schedule morning-news | every day 08:00 | Fetch top headlines`\n`/schedule standup | every weekday 09:00 | What should I focus on today?`\n`/schedule weekly | every monday 08:00 | Summarize my week ahead`")
@@ -675,8 +703,7 @@ func (b *Bot) handleScheduleAdd(chatID int64, sess *Session, args string) {
 	b.reply(chatID, fmt.Sprintf("Schedule *%s* added — %s ✓", name, desc))
 }
 
-func (b *Bot) handleAt(chatID int64, sess *Session, args string) {
-	// Format: /at <time> | <prompt>
+func (b *Bot) handleAt(chatID string, sess *Session, args string) {
 	parts := strings.SplitN(args, "|", 2)
 	if len(parts) != 2 {
 		b.reply(chatID, "Usage: `/at <time> | <prompt>`\n\nExample: `/at tomorrow 18:00 | give me a pasta recipe`")
@@ -706,12 +733,17 @@ func (b *Bot) handleAt(chatID int64, sess *Session, args string) {
 	b.reply(chatID, fmt.Sprintf("Scheduled for *%s* ✓", desc))
 }
 
-func (b *Bot) handleScheduleList(chatID int64, sess *Session) {
+func (b *Bot) handleScheduleList(chatID string, sess *Session) {
 	schedules, err := b.mem.listSchedulesForUser(sess.userID)
 	if err != nil || len(schedules) == 0 {
 		b.reply(chatID, "No schedules configured.")
 		return
 	}
+
+	transportName, localChatID := splitChatID(chatID)
+	b.transportsMu.RLock()
+	tp := b.transports[transportName]
+	b.transportsMu.RUnlock()
 
 	for _, s := range schedules {
 		status := "✅"
@@ -737,19 +769,18 @@ func (b *Bot) handleScheduleList(chatID int64, sess *Session) {
 			"%s *%s*\nProject: _%s_ · %s\n`%s` — last: %s\n_%s_",
 			status, s.Name, project, kind, s.Schedule, last, s.Prompt,
 		)
-		keyboard := tgbotapi.NewInlineKeyboardMarkup(
-			tgbotapi.NewInlineKeyboardRow(
-				tgbotapi.NewInlineKeyboardButtonData("🗑 Remove", fmt.Sprintf("delschedule:%d", s.ID)),
-			),
-		)
-		m := tgbotapi.NewMessage(chatID, text)
-		m.ParseMode = "Markdown"
-		m.ReplyMarkup = keyboard
-		b.api.Send(m)
+
+		if rt, ok := tp.(RichTransport); ok {
+			rt.SendWithButtons(localChatID, text, []Button{
+				{Label: "🗑 Remove", Data: fmt.Sprintf("delschedule:%d", s.ID)},
+			})
+		} else {
+			b.reply(chatID, text+fmt.Sprintf("\n`/unschedule %d` to remove", s.ID))
+		}
 	}
 }
 
-func (b *Bot) handleScheduleDelete(chatID int64, sess *Session, arg string) {
+func (b *Bot) handleScheduleDelete(chatID string, sess *Session, arg string) {
 	var id int64
 	if _, err := fmt.Sscanf(strings.TrimSpace(arg), "%d", &id); err != nil {
 		b.reply(chatID, "Usage: `/unschedule <id>` — get IDs with /schedules")
@@ -764,7 +795,7 @@ func (b *Bot) handleScheduleDelete(chatID int64, sess *Session, arg string) {
 }
 
 // runScheduledTask is called by the cron runner.
-func (b *Bot) runScheduledTask(id, userID, chatID int64, workspace, workingDir, prompt string) {
+func (b *Bot) runScheduledTask(id, userID int64, chatID string, workspace, workingDir, prompt string) {
 	sess := b.getSession(userID)
 	if sess == nil {
 		return
@@ -776,7 +807,6 @@ func (b *Bot) runScheduledTask(id, userID, chatID int64, workspace, workingDir, 
 	copy(hist, sess.history)
 	sess.mu.Unlock()
 
-	// Use the schedule's stored working dir; fall back to session's current dir
 	wd := workingDir
 	if wd == "" {
 		sess.mu.Lock()
@@ -818,7 +848,7 @@ func (b *Bot) activeModelForSession(sess *Session) string {
 	return b.cfg.Backend.DefaultModel
 }
 
-func (b *Bot) handleModelSwitch(chatID int64, sess *Session, arg string) {
+func (b *Bot) handleModelSwitch(chatID string, sess *Session, arg string) {
 	parts := strings.Fields(arg)
 	if len(parts) == 0 {
 		return
@@ -842,13 +872,11 @@ func (b *Bot) handleModelSwitch(chatID int64, sess *Session, arg string) {
 	}
 }
 
-
 // buildAICommand constructs the exec.Cmd for the configured backend.
 func (b *Bot) buildAICommand(prompt, model, systemPrompt string) *exec.Cmd {
 	bin := b.cfg.Backend.Binary
 	switch b.cfg.Backend.Type {
 	case "opencode":
-		// opencode CLI: opencode run --model <model> --system "<system>" "<prompt>"
 		cmd := exec.Command(bin, "run",
 			"--model", model,
 			"--system", systemPrompt,
@@ -887,7 +915,6 @@ func (b *Bot) runClaude(userID int64, prompt, workspace, workingDir, model strin
 			"- Never mention file paths in your responses",
 		workingDir)
 
-	// Load workspace README if it exists — it defines the workspace's purpose and AI instructions
 	if readme := readWorkspaceReadme(workingDir); readme != "" {
 		systemPrompt += "\n\n## Workspace Configuration (README.md)\n\n" + readme
 	}
@@ -918,7 +945,6 @@ func (b *Bot) runClaude(userID int64, prompt, workspace, workingDir, model strin
 		}
 	}
 
-	// Expand ~ so Claude doesn't get confused
 	systemPrompt = strings.ReplaceAll(systemPrompt, "~", home)
 
 	cmd := b.buildAICommand(prompt, model, systemPrompt)
@@ -947,110 +973,7 @@ func (b *Bot) runClaude(userID int64, prompt, workspace, workingDir, model strin
 	return result, nil
 }
 
-// handleUnknownUser notifies the admin when someone unrecognized messages the bot.
-func (b *Bot) handleUnknownUser(msg *tgbotapi.Message) {
-	adminID := b.cfg.Telegram.AdminUserID
-	if adminID == 0 {
-		return
-	}
-
-	from := msg.From
-	name := strings.TrimSpace(from.FirstName + " " + from.LastName)
-	username := from.UserName
-	text := msg.Text
-	if text == "" {
-		text = "(no text)"
-	}
-
-	notif := fmt.Sprintf(
-		"*Access request*\n\nName: %s\nUsername: @%s\nID: `%d`\n\nMessage: _%s_",
-		name, username, from.ID, text,
-	)
-
-	keyboard := tgbotapi.NewInlineKeyboardMarkup(
-		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("✅ Approve", fmt.Sprintf("approve:%d:%s:%s", from.ID, username, name)),
-			tgbotapi.NewInlineKeyboardButtonData("❌ Deny", fmt.Sprintf("deny:%d", from.ID)),
-		),
-	)
-	m := tgbotapi.NewMessage(adminID, notif)
-	m.ParseMode = "Markdown"
-	m.ReplyMarkup = keyboard
-	b.api.Send(m)
-
-	// Let the unknown user know their request is pending
-	b.reply(msg.Chat.ID, "I don't recognise you yet. I've notified my owner — hang tight.")
-}
-
-// handleCallback processes inline keyboard button presses (approve/deny user).
-func (b *Bot) handleCallback(cb *tgbotapi.CallbackQuery) {
-	// Acknowledge the button press immediately
-	b.api.Request(tgbotapi.NewCallback(cb.ID, ""))
-
-	adminID := b.cfg.Telegram.AdminUserID
-	if cb.From.ID != adminID {
-		return
-	}
-
-	data := cb.Data
-	if strings.HasPrefix(data, "approve:") {
-		// approve:<userID>:<username>:<name>
-		parts := strings.SplitN(strings.TrimPrefix(data, "approve:"), ":", 3)
-		if len(parts) != 3 {
-			return
-		}
-		var userID int64
-		fmt.Sscanf(parts[0], "%d", &userID)
-		username := parts[1]
-		name := parts[2]
-
-		if err := b.mem.approveUser(userID, username, name); err != nil {
-			b.reply(adminID, fmt.Sprintf("Failed to approve: %v", err))
-			return
-		}
-		sess := b.addSession(userID)
-		b.reply(adminID, fmt.Sprintf("✅ *%s* (@%s) approved.", name, username))
-		b.reply(sess.chatID, "You're in! Send me a message to get started.")
-
-	} else if strings.HasPrefix(data, "deny:") {
-		var userID int64
-		fmt.Sscanf(strings.TrimPrefix(data, "deny:"), "%d", &userID)
-		b.reply(adminID, "❌ Request denied.")
-		b.reply(userID, "Sorry, access not granted.")
-
-	} else if strings.HasPrefix(data, "delschedule:") {
-		var scheduleID int64
-		fmt.Sscanf(strings.TrimPrefix(data, "delschedule:"), "%d", &scheduleID)
-		sess := b.getSession(cb.From.ID)
-		if sess == nil {
-			return
-		}
-		if err := b.mem.deleteSchedule(sess.userID, scheduleID); err != nil {
-			b.api.Request(tgbotapi.NewCallback(cb.ID, "Failed to remove"))
-			return
-		}
-		b.cron.reload()
-		// Edit the message to show it's been removed (replace buttons with confirmation)
-		if cb.Message != nil {
-			edit := tgbotapi.NewEditMessageText(cb.Message.Chat.ID, cb.Message.MessageID,
-				cb.Message.Text+"\n\n~removed~")
-			edit.ParseMode = "Markdown"
-			b.api.Request(edit)
-			b.api.Request(tgbotapi.NewEditMessageReplyMarkup(cb.Message.Chat.ID, cb.Message.MessageID, tgbotapi.InlineKeyboardMarkup{}))
-		}
-		b.api.Request(tgbotapi.NewCallback(cb.ID, "Removed ✓"))
-		return
-	}
-
-	// Edit the original message to remove the buttons (for approve/deny)
-	if cb.Message != nil {
-		edit := tgbotapi.NewEditMessageReplyMarkup(adminID, cb.Message.MessageID, tgbotapi.InlineKeyboardMarkup{})
-		b.api.Request(edit)
-	}
-}
-
-func (b *Bot) handleAPIKey(chatID int64, cmd, args string) {
-	// /apikeys — list all keys
+func (b *Bot) handleAPIKey(chatID string, cmd, args string) {
 	if cmd == "apikeys" || args == "" || args == "list" {
 		keys := b.mem.listAPIKeys()
 		if len(keys) == 0 {
@@ -1116,9 +1039,7 @@ func (b *Bot) handleAPIKey(chatID int64, cmd, args string) {
 }
 
 // runSkill dispatches a skill command for a user.
-// It injects per-skill secrets as ARTOO_SECRET_* env vars and ARTOO_WD,
-// then sends any new files created by the skill back to the user.
-func (b *Bot) runSkill(chatID int64, sess *Session, skill *Skill, args string) {
+func (b *Bot) runSkill(chatID string, sess *Session, skill *Skill, args string) {
 	sess.mu.Lock()
 	userID := sess.userID
 	ws := sess.workspace
@@ -1132,7 +1053,6 @@ func (b *Bot) runSkill(chatID int64, sess *Session, skill *Skill, args string) {
 
 	before := snapshotFiles(wd)
 
-	// Build extraEnv: ARTOO_WD + secrets scoped to this skill
 	extraEnv := map[string]string{"ARTOO_WD": wd}
 	encSecrets, err := b.mem.getSecretsForSkill(userID, ws, skill.Name)
 	if err == nil {
@@ -1167,8 +1087,8 @@ func (b *Bot) runSkill(chatID int64, sess *Session, skill *Skill, args string) {
 }
 
 // handleSecretCommand handles /secret set|list|del subcommands.
-func (b *Bot) handleSecretCommand(chatID int64, sess *Session, args string) {
-	isAdmin := sess.userID == b.cfg.Telegram.AdminUserID
+func (b *Bot) handleSecretCommand(chatID string, sess *Session, args string) {
+	isAdmin := b.isAdmin(sess.userID)
 	usage := "Usage:\n" +
 		"`/secret set <name> <value> --skill <skill>` — store for current project\n" +
 		"`/secret set --global <name> <value> --skill <skill>` — store for all your projects\n" +
@@ -1290,7 +1210,6 @@ func (b *Bot) handleSecretCommand(chatID int64, sess *Session, args string) {
 }
 
 // parseSecretFlags parses --global, --system, and --skill flags from secret subcommand args.
-// Returns (isGlobal, isSystem, skillName, positionalArgs).
 func parseSecretFlags(args string) (global, system bool, skillName string, positional []string) {
 	fields := strings.Fields(args)
 	i := 0
@@ -1317,34 +1236,10 @@ func parseSecretFlags(args string) (global, system bool, skillName string, posit
 	return
 }
 
-// sendFileAuto sends a file as a photo if it's an image, otherwise as a document.
-func (b *Bot) sendFileAuto(chatID int64, path string) {
-	ext := strings.ToLower(filepath.Ext(path))
-	switch ext {
-	case ".png", ".jpg", ".jpeg", ".webp":
-		f, err := os.Open(path)
-		if err != nil {
-			log.Printf("failed to open image %s: %v", path, err)
-			return
-		}
-		defer f.Close()
-		photo := tgbotapi.NewPhoto(chatID, tgbotapi.FileReader{
-			Name:   filepath.Base(path),
-			Reader: f,
-		})
-		if _, err := b.api.Send(photo); err != nil {
-			log.Printf("failed to send photo %s, falling back to document: %v", path, err)
-			b.sendFile(chatID, path)
-		}
-	default:
-		b.sendFile(chatID, path)
-	}
-}
-
 // handleSkillsCommand handles /skills and /skills reload.
-func (b *Bot) handleSkillsCommand(chatID int64, sess *Session, args string) {
+func (b *Bot) handleSkillsCommand(chatID string, sess *Session, args string) {
 	if args == "reload" {
-		if sess.userID != b.cfg.Telegram.AdminUserID {
+		if !b.isAdmin(sess.userID) {
 			b.reply(chatID, "Only the admin can reload skills.")
 			return
 		}
@@ -1388,12 +1283,50 @@ func (b *Bot) handleSkillsCommand(chatID int64, sess *Session, args string) {
 	b.reply(chatID, "*Skills:*\n"+strings.Join(lines, "\n"))
 }
 
-func (b *Bot) reply(chatID int64, text string) {
-	msg := tgbotapi.NewMessage(chatID, text)
-	msg.ParseMode = "Markdown"
-	if _, err := b.api.Send(msg); err != nil {
-		msg.ParseMode = ""
-		b.api.Send(msg)
+// reply sends a text message via the appropriate transport.
+func (b *Bot) reply(chatID string, text string) {
+	transportName, local := splitChatID(chatID)
+	b.transportsMu.RLock()
+	tp := b.transports[transportName]
+	b.transportsMu.RUnlock()
+	if tp == nil {
+		log.Printf("reply: no transport %q for chatID %q", transportName, chatID)
+		return
+	}
+	if err := tp.Send(local, text); err != nil {
+		log.Printf("reply: send error (transport=%s, chat=%s): %v", transportName, local, err)
+	}
+}
+
+// sendFile delivers a file via the appropriate transport.
+func (b *Bot) sendFile(chatID string, path string) {
+	transportName, local := splitChatID(chatID)
+	b.transportsMu.RLock()
+	tp := b.transports[transportName]
+	b.transportsMu.RUnlock()
+	if tp == nil {
+		return
+	}
+	if err := tp.SendFile(local, path); err != nil {
+		log.Printf("sendFile: error (transport=%s, chat=%s, path=%s): %v", transportName, local, path, err)
+	}
+}
+
+// sendFileAuto sends images as photos on Telegram, otherwise falls back to sendFile.
+func (b *Bot) sendFileAuto(chatID string, path string) {
+	transportName, local := splitChatID(chatID)
+	b.transportsMu.RLock()
+	tp := b.transports[transportName]
+	b.transportsMu.RUnlock()
+	if tp == nil {
+		return
+	}
+	if tg, ok := tp.(*TelegramTransport); ok {
+		tg.sendFileAuto(local, path)
+		return
+	}
+	if err := tp.SendFile(local, path); err != nil {
+		log.Printf("sendFileAuto: error (transport=%s, chat=%s, path=%s): %v", transportName, local, path, err)
 	}
 }
 
@@ -1479,84 +1412,6 @@ func newFiles(dir string, before map[string]int64) []string {
 		}
 	}
 	return result
-}
-
-func (b *Bot) sendFile(chatID int64, path string) {
-	f, err := os.Open(path)
-	if err != nil {
-		log.Printf("failed to open file %s: %v", path, err)
-		return
-	}
-	defer f.Close()
-
-	doc := tgbotapi.NewDocument(chatID, tgbotapi.FileReader{
-		Name:   filepath.Base(path),
-		Reader: f,
-	})
-	if _, err := b.api.Send(doc); err != nil {
-		log.Printf("failed to send file %s: %v", path, err)
-	}
-}
-
-// handleFileUpload saves an uploaded document to the current project and extracts its content as markdown.
-func (b *Bot) handleFileUpload(chatID int64, sess *Session, doc *tgbotapi.Document) {
-	sess.mu.Lock()
-	wd := sess.workingDir
-	ws := sess.workspace
-	model := b.activeModelForSession(sess)
-	sess.mu.Unlock()
-
-	b.reply(chatID, fmt.Sprintf("Received *%s* — saving to project...", doc.FileName))
-
-	// Download file from Telegram
-	fileConfig := tgbotapi.FileConfig{FileID: doc.FileID}
-	file, err := b.api.GetFile(fileConfig)
-	if err != nil {
-		b.reply(chatID, fmt.Sprintf("Failed to get file: %v", err))
-		return
-	}
-
-	url := file.Link(b.cfg.Telegram.Token)
-	destPath := filepath.Join(wd, doc.FileName)
-
-	// Download to workspace
-	resp, err := downloadURL(url, destPath)
-	if err != nil {
-		b.reply(chatID, fmt.Sprintf("Failed to download: %v", err))
-		return
-	}
-	_ = resp
-
-	// Ask Claude to extract and summarize the content as a markdown memory file
-	mdName := strings.TrimSuffix(doc.FileName, filepath.Ext(doc.FileName)) + ".md"
-	prompt := fmt.Sprintf(
-		`I've saved a file called "%s" to this workspace.
-Read it and create a markdown summary file called "%s" that captures the key information, facts, and context from it.
-Structure it clearly with headings. This file will serve as project memory/context.`,
-		doc.FileName, mdName)
-
-	stopTyping := make(chan struct{})
-	go func() {
-		for {
-			select {
-			case <-stopTyping:
-				return
-			default:
-				b.api.Send(tgbotapi.NewChatAction(chatID, tgbotapi.ChatTyping))
-				time.Sleep(4 * time.Second)
-			}
-		}
-	}()
-
-	response, err := b.runClaude(sess.userID, prompt, ws, wd, model, nil)
-	close(stopTyping)
-	if err != nil {
-		b.reply(chatID, fmt.Sprintf("File saved but extraction failed: %v", err))
-		return
-	}
-
-	b.mem.recordFile(sess.userID, ws, doc.FileName, destPath, int64(doc.FileSize))
-	b.reply(chatID, fmt.Sprintf("*%s* added to project ✓\n\n%s", doc.FileName, response))
 }
 
 // downloadURL downloads a URL to a local file path.

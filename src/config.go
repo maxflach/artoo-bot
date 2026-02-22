@@ -16,6 +16,14 @@ type Config struct {
 		AllowedUserIDs []int64 `yaml:"allowed_user_ids"`
 		AdminUserID    int64   `yaml:"admin_user_id"`
 	} `yaml:"telegram"`
+	Discord struct {
+		Token          string  `yaml:"token"`           // Discord bot token (empty = disabled)
+		AllowedUserIDs []int64 `yaml:"allowed_user_ids"` // Discord user IDs (snowflakes as int64)
+		AdminUserID    int64   `yaml:"admin_user_id"`
+	} `yaml:"discord"`
+	WebChat struct {
+		Enabled bool `yaml:"enabled"` // serve /chat and /chat/sse endpoints
+	} `yaml:"webchat"`
 	Backend struct {
 		Type         string `yaml:"type"`          // "claude-code" or "opencode"
 		Binary       string `yaml:"binary"`        // path to the binary

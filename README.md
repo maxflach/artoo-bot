@@ -237,6 +237,104 @@ persona:
 
 memory:
   max_age_days: 90
+
+api:
+  port: 8088  # set to 0 to disable
+```
+
+---
+
+## REST API
+
+The bot exposes an optional HTTP API so other services on your machine can trigger messages or run tasks. Enable it by setting `api.port` in your config.
+
+### Authentication
+
+All endpoints (except `/v1/health`) require an API key passed as a Bearer token:
+
+```
+Authorization: Bearer artoo_a1b2c3...
+```
+
+**Managing keys** (admin only, via Telegram):
+
+```
+/apikey new <name>     — create a new key (shown once, copy it)
+/apikeys               — list all keys with last-used time
+/apikey revoke <id>    — permanently revoke a key
+```
+
+---
+
+### `GET /v1/health`
+
+No authentication required. Returns bot status.
+
+```bash
+curl http://localhost:8088/v1/health
+```
+
+```json
+{"bot": "Artoo", "status": "ok"}
+```
+
+---
+
+### `POST /v1/send`
+
+Send a text message to a user via Telegram.
+
+```bash
+curl -X POST http://localhost:8088/v1/send \
+  -H "Authorization: Bearer artoo_..." \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Your report is ready"}'
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `text` | string | ✓ | Message to send |
+| `user_id` | int | — | Telegram user ID. Defaults to admin if omitted |
+
+```json
+{"ok": true}
+```
+
+---
+
+### `POST /v1/run`
+
+Run a prompt as a user. The task runs in the background and the result is sent via Telegram when complete.
+
+```bash
+curl -X POST http://localhost:8088/v1/run \
+  -H "Authorization: Bearer artoo_..." \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "check disk usage and summarise", "workspace": "global"}'
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `prompt` | string | ✓ | The prompt to run |
+| `user_id` | int | — | Telegram user ID. Defaults to admin if omitted |
+| `workspace` | string | — | Project to run in. Defaults to user's active project |
+
+```json
+{"status": "queued"}
+```
+
+The response returns immediately. The result arrives as a Telegram message when the task finishes.
+
+---
+
+### Example: trigger from a cron job or script
+
+```bash
+#!/bin/bash
+curl -s -X POST http://localhost:8088/v1/run \
+  -H "Authorization: Bearer $ARTOO_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d "{\"prompt\": \"$1\", \"workspace\": \"${2:-global}\"}"
 ```
 
 ---
@@ -244,10 +342,10 @@ memory:
 ## Architecture
 
 ```
-Telegram ──→ Bot (Go)
-                ├── SQLite  (memories, projects, schedules, approved users)
+Telegram ──→ Bot (Go) ←── HTTP API  (Bearer token auth)
+                ├── SQLite  (memories, projects, schedules, users, api keys)
                 ├── Cron runner  (schedules, one-off reminders)
-                └── exec.Command  ──→  claude -p "..." --system-prompt "..."
+                └── exec.Command  ──→  agentic CLI  (claude, opencode, ...)
                                             └── runs on your machine
                                                 with full filesystem access
 ```

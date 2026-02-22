@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.10 — 2026-02-22
+
+### Added
+- **Docker support** — `Dockerfile` (multi-stage: Go builder + Ubuntu 24.04 runtime), `docker-compose.yml`, and `.dockerignore`
+- Runtime image ships `pdftotext` (poppler-utils), `pandoc`, `python3`/`openpyxl`, and Claude Code CLI (Node 22 + npm)
+- Volumes: `~/.config/bot` (config + SQLite), `~/bot-workspace` (Claude working dirs), `~/.claude` (auth)
+
+---
+
 ## v0.9 — 2026-02-22
 
 ### Changed

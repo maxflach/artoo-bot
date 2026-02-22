@@ -1,0 +1,8 @@
+bot
+bot.*.log
+bot.*.err
+dist/
+releases/
+*.log
+*.err
+config.yaml

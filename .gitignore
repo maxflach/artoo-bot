@@ -9,6 +9,8 @@ config.yaml
 
 # Exceptions
 !src/openapi.yaml
+!docker-compose.yml
+!Dockerfile
 
 # Logs
 *.log

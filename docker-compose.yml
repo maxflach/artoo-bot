@@ -1,0 +1,12 @@
+services:
+  artoo:
+    build: .
+    restart: unless-stopped
+    volumes:
+      # Bot config and SQLite DB (create ~/.config/bot/<instance>/config.yaml first)
+      - ${HOME}/.config/bot:/root/.config/bot
+      # Claude's working directories
+      - ${HOME}/bot-workspace:/root/bot-workspace
+      # Claude Code auth — run `claude login` on the host first
+      - ${HOME}/.claude:/root/.claude
+    # Override instance name with: docker compose run artoo --instance mybot

@@ -54,7 +54,7 @@ func newBot(cfg *Config) (*Bot, error) {
 		allowed[id] = true
 	}
 
-	mem, err := newMemoryStore(cfg.Claude.Binary)
+	mem, err := newMemoryStore()
 	if err != nil {
 		return nil, fmt.Errorf("memory store: %w", err)
 	}
@@ -71,7 +71,7 @@ func newBot(cfg *Config) (*Bot, error) {
 	// Restore last active workspace from DB if available.
 	sessions := make(map[int64]*Session, len(allUserIDs))
 	for _, id := range allUserIDs {
-		sessions[id] = newSession(id, cfg.Claude.WorkingDir, mem)
+		sessions[id] = newSession(id, cfg.Backend.WorkingDir, mem)
 	}
 
 	b := &Bot{
@@ -117,7 +117,7 @@ func (b *Bot) getSession(userID int64) *Session {
 
 // addSession creates a new session for a newly approved user.
 func (b *Bot) addSession(userID int64) *Session {
-	sess := newSession(userID, b.cfg.Claude.WorkingDir, b.mem)
+	sess := newSession(userID, b.cfg.Backend.WorkingDir, b.mem)
 	b.sessionsMu.Lock()
 	b.sessions[userID] = sess
 	b.sessionsMu.Unlock()
@@ -216,7 +216,7 @@ func (b *Bot) handleCommand(chatID int64, sess *Session, text string) {
 		sess.mu.Lock()
 		sess.history = nil
 		sess.workspace = "global"
-		wd := userWorkingDir(b.cfg.Claude.WorkingDir, sess.userID)
+		wd := userWorkingDir(b.cfg.Backend.WorkingDir, sess.userID)
 		sess.workingDir = wd
 		sess.model = ""
 		sess.mu.Unlock()
@@ -341,7 +341,7 @@ func projectDir(baseWD, name string) string {
 
 // handleProjectList lists all projects for the current user.
 func (b *Bot) handleProjectList(chatID int64, sess *Session) {
-	baseWD := userWorkingDir(b.cfg.Claude.WorkingDir, sess.userID)
+	baseWD := userWorkingDir(b.cfg.Backend.WorkingDir, sess.userID)
 
 	entries, err := os.ReadDir(baseWD)
 	if err != nil {
@@ -620,7 +620,9 @@ func (b *Bot) runUserMessage(chatID int64, sess *Session, text string) {
 	}
 	sess.mu.Unlock()
 
-	go b.mem.extractAndSave(sess.userID, ws, text, response)
+	go b.mem.extractAndSave(sess.userID, ws, text, response, func(prompt string) (string, error) {
+		return b.runClaude(sess.userID, prompt, ws, wd, b.cfg.Backend.ExtractModel, nil)
+	})
 }
 
 func (b *Bot) handleScheduleAdd(chatID int64, sess *Session, args string) {
@@ -794,7 +796,7 @@ func (b *Bot) activeModelForSession(sess *Session) string {
 	if ws := b.mem.getWorkspaceModel(sess.userID, sess.workspace); ws != "" {
 		return ws
 	}
-	return b.cfg.Claude.DefaultModel
+	return b.cfg.Backend.DefaultModel
 }
 
 func (b *Bot) handleModelSwitch(chatID int64, sess *Session, arg string) {
@@ -821,6 +823,36 @@ func (b *Bot) handleModelSwitch(chatID int64, sess *Session, arg string) {
 	}
 }
 
+
+// buildAICommand constructs the exec.Cmd for the configured backend.
+func (b *Bot) buildAICommand(prompt, model, systemPrompt string) *exec.Cmd {
+	bin := b.cfg.Backend.Binary
+	switch b.cfg.Backend.Type {
+	case "opencode":
+		// opencode CLI: opencode run --model <model> --system "<system>" "<prompt>"
+		cmd := exec.Command(bin, "run",
+			"--model", model,
+			"--system", systemPrompt,
+			prompt,
+		)
+		return cmd
+	default: // "claude-code"
+		cmd := exec.Command(bin, "-p", prompt,
+			"--model", model,
+			"--system-prompt", systemPrompt,
+			"--dangerously-skip-permissions",
+			"--allowedTools", "Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch",
+		)
+		env := []string{}
+		for _, e := range os.Environ() {
+			if !strings.HasPrefix(e, "CLAUDECODE=") {
+				env = append(env, e)
+			}
+		}
+		cmd.Env = env
+		return cmd
+	}
+}
 
 // runClaude executes the Claude CLI with all context provided explicitly (no session access).
 func (b *Bot) runClaude(userID int64, prompt, workspace, workingDir, model string, history []Message) (string, error) {
@@ -855,21 +887,8 @@ func (b *Bot) runClaude(userID int64, prompt, workspace, workingDir, model strin
 	// Expand ~ so Claude doesn't get confused
 	systemPrompt = strings.ReplaceAll(systemPrompt, "~", home)
 
-	cmd := exec.Command(b.cfg.Claude.Binary, "-p", prompt,
-		"--model", model,
-		"--system-prompt", systemPrompt,
-		"--dangerously-skip-permissions",
-		"--allowedTools", "Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch",
-	)
+	cmd := b.buildAICommand(prompt, model, systemPrompt)
 	cmd.Dir = workingDir
-
-	env := []string{}
-	for _, e := range os.Environ() {
-		if !strings.HasPrefix(e, "CLAUDECODE=") {
-			env = append(env, e)
-		}
-	}
-	cmd.Env = env
 
 	out, err := cmd.Output()
 	if err != nil {

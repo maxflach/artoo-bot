@@ -16,11 +16,13 @@ type Config struct {
 		AllowedUserIDs []int64 `yaml:"allowed_user_ids"`
 		AdminUserID    int64   `yaml:"admin_user_id"`
 	} `yaml:"telegram"`
-	Claude struct {
-		Binary       string `yaml:"binary"`
-		WorkingDir   string `yaml:"working_dir"`
-		DefaultModel string `yaml:"default_model"`
-	} `yaml:"claude"`
+	Backend struct {
+		Type         string `yaml:"type"`          // "claude-code" or "opencode"
+		Binary       string `yaml:"binary"`        // path to the binary
+		WorkingDir   string `yaml:"working_dir"`   // base working dir for all users
+		DefaultModel string `yaml:"default_model"` // default model name
+		ExtractModel string `yaml:"extract_model"` // model used for memory extraction (optional)
+	} `yaml:"backend"`
 	Persona struct {
 		Name         string `yaml:"name"`
 		SystemPrompt string `yaml:"system_prompt"`
@@ -59,11 +61,17 @@ func loadConfig() (*Config, error) {
 	if cfg.Memory.MaxAgeDays == 0 {
 		cfg.Memory.MaxAgeDays = 90
 	}
-	if cfg.Claude.DefaultModel == "" {
-		cfg.Claude.DefaultModel = "claude-sonnet-4-6"
+	if cfg.Backend.Type == "" {
+		cfg.Backend.Type = "claude-code"
 	}
-	if cfg.Claude.WorkingDir == "" {
-		cfg.Claude.WorkingDir = workspaceDir()
+	if cfg.Backend.DefaultModel == "" {
+		cfg.Backend.DefaultModel = "claude-sonnet-4-6"
+	}
+	if cfg.Backend.WorkingDir == "" {
+		cfg.Backend.WorkingDir = workspaceDir()
+	}
+	if cfg.Backend.ExtractModel == "" {
+		cfg.Backend.ExtractModel = cfg.Backend.DefaultModel
 	}
 	return &cfg, nil
 }

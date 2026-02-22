@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -15,15 +14,14 @@ import (
 )
 
 type MemoryStore struct {
-	db        *sql.DB
-	claudeBin string
+	db *sql.DB
 }
 
 func dbPath() string {
 	return filepath.Join(configDir(), "memory", "bot.db")
 }
 
-func newMemoryStore(claudeBin string) (*MemoryStore, error) {
+func newMemoryStore() (*MemoryStore, error) {
 	dir := filepath.Join(configDir(), "memory")
 	os.MkdirAll(dir, 0755)
 
@@ -110,7 +108,7 @@ func newMemoryStore(claudeBin string) (*MemoryStore, error) {
 	db.Exec(`CREATE INDEX IF NOT EXISTS idx_schedules_user  ON schedules(user_id)`)
 	db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_workspaces_user_name ON workspaces(user_id, name)`)
 
-	ms := &MemoryStore{db: db, claudeBin: claudeBin}
+	ms := &MemoryStore{db: db}
 	ms.initUserStateTable()
 	return ms, nil
 }
@@ -241,27 +239,20 @@ func (m *MemoryStore) list(userID int64, workspace string, maxAgeDays int) strin
 	return strings.Join(lines, "\n")
 }
 
-func (m *MemoryStore) extractAndSave(userID int64, workspace, userMsg, assistantReply string) {
+// extractAndSave uses the provided runner to extract memories from a conversation.
+// runner(prompt) should return the raw text output from the AI.
+func (m *MemoryStore) extractAndSave(userID int64, workspace, userMsg, assistantReply string, runner func(string) (string, error)) {
 	prompt := "Extract factual memories from this conversation worth remembering for future sessions.\n" +
 		"Focus on: preferences, decisions, project details, personal facts, patterns.\n" +
 		"Each memory should be one concise sentence.\n" +
 		"Return ONLY a valid JSON array of strings. If nothing is worth remembering, return [].\n\n" +
 		"User: " + userMsg + "\nAssistant: " + assistantReply
 
-	cmd := exec.Command(m.claudeBin, "-p", prompt, "--model", "claude-haiku-4-5")
-	env := []string{}
-	for _, e := range os.Environ() {
-		if !strings.HasPrefix(e, "CLAUDECODE=") {
-			env = append(env, e)
-		}
-	}
-	cmd.Env = env
-
-	out, err := cmd.Output()
+	raw, err := runner(prompt)
 	if err != nil {
 		return
 	}
-	raw := strings.TrimSpace(string(out))
+	raw = strings.TrimSpace(raw)
 	start := strings.Index(raw, "[")
 	end := strings.LastIndex(raw, "]")
 	if start == -1 || end <= start {

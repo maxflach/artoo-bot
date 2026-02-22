@@ -342,6 +342,8 @@ api:
 
 The bot exposes an optional HTTP API so other services on your machine can trigger messages or run tasks. Enable it by setting `api.port` in your config.
 
+An **OpenAPI 3.0 spec** is served at `/openapi.yaml` and a browsable **Swagger UI** at `/docs` (e.g. `http://localhost:8088/docs`). No authentication required to access either.
+
 ### Authentication
 
 All endpoints (except `/v1/health`) require an API key passed as a Bearer token:

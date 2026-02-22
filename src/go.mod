@@ -1,6 +1,6 @@
 module bot
 
-go 1.25.7
+go 1.26.0
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect

@@ -37,7 +37,7 @@ What's coming next: support for custom skills and a local MCP server to register
 | Projects | Yes — README-driven, per-user, with their own dirs | Workspace support |
 | Scheduling | Built-in (natural language cron) | Varies |
 | Skills / plugins | Coming (local MCP server) | Built-in skill system |
-| Setup | Single binary + YAML config | Interactive wizard |
+| Setup | Single binary + interactive wizard | Interactive wizard |
 | Philosophy | Delegate everything to the AI tool | Custom agent with its own tool layer |
 
 The key philosophical difference: this bot is a thin shell around an existing agentic tool. It handles auth, routing, memory, and scheduling — then hands the actual work off to Claude Code. OpenClaw builds its own tool layer. Neither is wrong; they're just different bets on where the intelligence should live.

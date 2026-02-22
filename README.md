@@ -174,6 +174,9 @@ Send any plain text message — it goes straight to your configured agentic CLI,
 | `/new` | Fresh start — clear history and reset to global |
 | `/clear` | Clear conversation history only |
 | `/help` | Show all commands |
+| `/apikey new <name>` | Create a new API key _(admin only)_ |
+| `/apikeys` | List all API keys with last-used time _(admin only)_ |
+| `/apikey revoke <id>` | Revoke an API key _(admin only)_ |
 
 ### Projects
 
@@ -203,6 +206,26 @@ Natural language scheduling that converts to cron:
 ```
 
 Schedules survive reboots. One-off reminders (`/at`) delete themselves after firing.
+
+### Persona
+
+The persona is defined entirely in the config — no code changes needed. The `name` is used in responses and the `/help` header. The `system_prompt` is injected into every request and shapes how the bot behaves.
+
+A good system prompt is short and direct. It should define:
+- Who the bot is and what its job is
+- Tone (concise, friendly, formal — your call)
+- Any standing rules (e.g. "never mention file paths", "always respond in English")
+
+The persona is combined with the active project's README on each request, so you can keep the global persona generic and let individual projects define more specific behaviour through their own README instructions.
+
+```yaml
+persona:
+  name: "Jarvis"
+  system_prompt: |
+    You are Jarvis — a calm, precise assistant.
+    Be brief. Prefer bullet points over paragraphs.
+    When asked to do something, do it — no caveats.
+```
 
 ### User approval
 

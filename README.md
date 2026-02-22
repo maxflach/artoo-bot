@@ -39,10 +39,13 @@ There are good tools in this space already — [OpenClaw](https://github.com/ope
 | Scheduling | Built-in (natural language cron) | Varies |
 | Skills / plugins | Yes — custom `/commands` via `skills/` folders | Built-in skill system |
 | MCP server | Yes — skills exposed as tools at `/mcp/sse` | No |
+| Secrets | AES-256-GCM encrypted, locked per skill — only the skill you explicitly trusted receives the credential; Claude never sees values | Varies |
 | Setup | Single binary + interactive wizard | Interactive wizard |
 | Philosophy | Delegate everything to the AI tool | Custom agent with its own tool layer |
 
 The key philosophical difference: this bot is a thin shell around an existing agentic CLI. It handles auth, routing, memory, and scheduling — then hands the actual work off to whatever tool you configure. I use Claude Code personally, but any agentic CLI that accepts a prompt and returns output will work. OpenClaw builds its own tool layer. Neither is wrong; they're just different bets on where the intelligence should live.
+
+On secrets specifically: credentials are encrypted at rest with AES-256-GCM and locked to a named skill at storage time. When a skill runs, it receives only the secrets explicitly assigned to it — no other skill can read them, even if running in the same project. Claude itself never sees secret values; they go directly into the shell environment. This is a deliberate design choice: the access declaration is explicit and auditable, not implicit and ambient.
 
 ---
 

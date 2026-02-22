@@ -186,7 +186,7 @@ Projects are the core concept. Each project gets:
 - Its own schedules
 
 ```
-/project MusicDataLabs | Monitor the sync licensing industry and produce weekly PDF digests
+/project research | Track industry news and produce weekly PDF digests
 ```
 
 This creates the project directory and generates a README based on your description. From then on, every message in that project context includes the README as instructions.

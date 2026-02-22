@@ -1674,7 +1674,7 @@ func snapshotFiles(dir string) map[string]int64 {
 	return snap
 }
 
-// newFiles returns files in dir that didn't exist in the before snapshot.
+// newFiles returns files in dir that are new or modified since the before snapshot.
 func newFiles(dir string, before map[string]int64) []string {
 	var result []string
 	entries, err := os.ReadDir(dir)
@@ -1686,7 +1686,11 @@ func newFiles(dir string, before map[string]int64) []string {
 			continue
 		}
 		path := filepath.Join(dir, e.Name())
-		if _, existed := before[path]; !existed {
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if prevMod, existed := before[path]; !existed || info.ModTime().UnixNano() != prevMod {
 			result = append(result, path)
 		}
 	}

@@ -341,9 +341,9 @@ Secrets are scoped to your current project by default, or globally across all pr
 When a skill runs, it receives secrets from both scopes merged together. If the same key exists in both, the project-level value wins (useful for overriding a global default in one specific project).
 
 ```
-Global scope (*):    GEMINI_KEY = xxxxxxx   ← available everywhere
-Project "research":  GEMINI_KEY = yyyyyyy   ← overrides global in this project
-Project "finance":   (none)                 ← uses global GEMINI_KEY
+Global scope (*):    GEMINI_KEY = xxxxxxx   ← available in all your projects
+Project "research":  GEMINI_KEY = yyyyyyy   ← overrides global in this project only
+Project "finance":   (none)                 ← falls back to your global GEMINI_KEY
 ```
 
 #### Encryption

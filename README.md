@@ -367,12 +367,14 @@ If you want to back up your secrets, back up both the database (`~/.config/bot/<
 #### Example: set up and use the `/imagine` skill
 
 ```
-/secret set GEMINI_API_KEY AIzaSy... --skill imagine
-→ Secret GEMINI_API_KEY saved for project global, skill: imagine ✓
+/secret set --global GEMINI_API_KEY AIzaSy... --skill imagine
+→ Secret GEMINI_API_KEY saved for all your projects (global), skill: imagine ✓
 
 /imagine a tiny robot sitting on a cloud at sunset
 → [image sent as photo]
 ```
+
+Setting it with `--global` means it works in every project without having to set it again.
 
 The `imagine` skill is installed automatically by `install.sh`. It calls the Gemini Imagen API, saves the result as a PNG to your working directory, and the bot sends it back as a Telegram photo.
 

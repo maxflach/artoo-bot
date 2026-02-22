@@ -91,21 +91,18 @@ brew install go
 
 ## Installation
 
-### Download a pre-built binary
-
-Grab the latest release for your platform from the [Releases page](https://github.com/maxflach/artoo-bot/releases):
-
-| Platform | Binary |
-|---|---|
-| macOS (Apple Silicon) | `artoo-darwin-arm64` |
-| macOS (Intel) | `artoo-darwin-amd64` |
-| Linux (x86_64) | `artoo-linux-amd64` |
-| Linux (ARM64) | `artoo-linux-arm64` |
+### Quick install
 
 ```bash
-chmod +x artoo-*
-mv artoo-* bot
-./bot --setup
+curl -fsSL https://raw.githubusercontent.com/maxflach/artoo-bot/main/get.sh | bash
+```
+
+Detects your OS and architecture (macOS/Linux, arm64/amd64), downloads the right binary from the latest release, and installs it to `/usr/local/bin/artoo` (or `~/.local/bin/artoo` if you don't have write access).
+
+Then run the setup wizard:
+
+```bash
+artoo --setup
 ```
 
 ### Or build from source

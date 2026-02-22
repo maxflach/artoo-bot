@@ -32,18 +32,40 @@ type Session struct {
 	history    []Message
 }
 
+// ProjectOptions captures answers from the interactive new-project setup flow.
+type ProjectOptions struct {
+	IsResearch bool
+	AutoReport bool
+}
+
+// PendingProject holds state for a project being configured via Telegram buttons.
+type PendingProject struct {
+	Token       string
+	Name        string
+	Description string
+	WorkingDir  string
+	UserID      int64
+	ChatID      string
+	Model       string
+	Step        int // 1 = asking research?, 2 = asking auto-report?
+	IsResearch  bool
+	AutoReport  bool
+}
+
 type Bot struct {
-	cfg          *Config
-	transports   map[string]Transport
-	transportsMu sync.RWMutex
-	allowedIDs   map[int64]bool
-	mem          *MemoryStore
-	cron         *CronRunner
-	sessionsMu   sync.RWMutex
-	sessions     map[int64]*Session
-	skillsMu     sync.RWMutex
-	skills       map[string]*Skill
-	secretKey    []byte
+	cfg                *Config
+	transports         map[string]Transport
+	transportsMu       sync.RWMutex
+	allowedIDs         map[int64]bool
+	mem                *MemoryStore
+	cron               *CronRunner
+	sessionsMu         sync.RWMutex
+	sessions           map[int64]*Session
+	skillsMu           sync.RWMutex
+	skills             map[string]*Skill
+	secretKey          []byte
+	pendingProjectsMu  sync.RWMutex
+	pendingProjects    map[string]*PendingProject
 }
 
 func newBot(cfg *Config) (*Bot, error) {
@@ -79,12 +101,13 @@ func newBot(cfg *Config) (*Bot, error) {
 	}
 
 	b := &Bot{
-		cfg:        cfg,
-		transports: make(map[string]Transport),
-		allowedIDs: allowed,
-		mem:        mem,
-		sessions:   sessions,
-		secretKey:  secretKey,
+		cfg:             cfg,
+		transports:      make(map[string]Transport),
+		allowedIDs:      allowed,
+		mem:             mem,
+		sessions:        sessions,
+		secretKey:       secretKey,
+		pendingProjects: make(map[string]*PendingProject),
 	}
 	b.cron = newCronRunner(b)
 	b.skills = loadSkills(skillPaths(""))
@@ -362,6 +385,33 @@ func (b *Bot) handleCommand(chatID string, sess *Session, text string) {
 		}
 		b.handleAPIKey(chatID, cmd, args)
 
+	case "report":
+		if args == "reload" {
+			b.reply(chatID, "Templates are loaded fresh on each render ✓")
+			return
+		}
+		sess.mu.Lock()
+		wd := sess.workingDir
+		ws := sess.workspace
+		uid := sess.userID
+		sess.mu.Unlock()
+		reportPath := filepath.Join(wd, "report.md")
+		if _, err := os.Stat(reportPath); os.IsNotExist(err) {
+			b.reply(chatID, "No `report.md` found in the current project.\n\nAsk me to generate a report and I'll create one.")
+			return
+		}
+		userBaseDir := userWorkingDir(b.cfg.Backend.WorkingDir, uid)
+		tmpl, _ := loadReportTemplate(wd, userBaseDir)
+		outPath := strings.TrimSuffix(reportPath, ".md") + "_" + time.Now().Format("2006-01-02") + ".pdf"
+		if err := RenderMarkdownReport(reportPath, outPath, tmpl); err != nil {
+			b.reply(chatID, fmt.Sprintf("Report render failed: %v", err))
+			return
+		}
+		b.sendFileAuto(chatID, outPath)
+		if info, err := os.Stat(outPath); err == nil {
+			b.mem.recordFile(uid, ws, filepath.Base(outPath), outPath, info.Size())
+		}
+
 	case "skills":
 		b.handleSkillsCommand(chatID, sess, args)
 
@@ -473,8 +523,7 @@ func (b *Bot) handleWorkspace(chatID string, sess *Session, args string) {
 	model := b.activeModelForSession(sess)
 
 	if isNew && description != "" {
-		b.reply(chatID, fmt.Sprintf("Project *%s* created. Writing README...", name))
-		b.generateWorkspaceReadme(chatID, sess, name, description)
+		b.startProjectSetup(chatID, sess, name, description, wsDir, model)
 	} else if isNew {
 		b.reply(chatID, fmt.Sprintf("Project *%s* created.\nModel: `%s`\n\nTip: describe what this project is for and I'll write a README for it.", name, model))
 	} else {
@@ -487,46 +536,53 @@ func (b *Bot) handleWorkspace(chatID string, sess *Session, args string) {
 	}
 }
 
+// startProjectSetup begins interactive project configuration via buttons if the transport
+// supports it, otherwise falls back to immediate README generation.
+func (b *Bot) startProjectSetup(chatID string, sess *Session, name, description, wsDir, model string) {
+	transportName, localChatID := splitChatID(chatID)
+	b.transportsMu.RLock()
+	tp := b.transports[transportName]
+	b.transportsMu.RUnlock()
+
+	rt, hasButtons := tp.(RichTransport)
+	if !hasButtons {
+		b.reply(chatID, fmt.Sprintf("Project *%s* created. Writing README...", name))
+		b.generateWorkspaceReadme(chatID, sess, name, description, nil)
+		return
+	}
+
+	token := fmt.Sprintf("%d-%d", sess.userID, time.Now().UnixNano())
+	pending := &PendingProject{
+		Token:       token,
+		Name:        name,
+		Description: description,
+		WorkingDir:  wsDir,
+		UserID:      sess.userID,
+		ChatID:      chatID,
+		Model:       model,
+		Step:        1,
+	}
+	b.pendingProjectsMu.Lock()
+	b.pendingProjects[token] = pending
+	b.pendingProjectsMu.Unlock()
+
+	rt.SendWithButtons(localChatID,
+		fmt.Sprintf("Project *%s* created — quick setup:\n\nDoes this project involve web research or data gathering?", name),
+		[]Button{
+			{Label: "Yes — research", Data: fmt.Sprintf("projsetup:%s:research:yes", token)},
+			{Label: "No — other", Data: fmt.Sprintf("projsetup:%s:research:no", token)},
+		},
+	)
+}
+
 // generateWorkspaceReadme runs Claude to generate README content, then writes it to disk.
-func (b *Bot) generateWorkspaceReadme(chatID string, sess *Session, name, description string) {
+func (b *Bot) generateWorkspaceReadme(chatID string, sess *Session, name, description string, opts *ProjectOptions) {
 	sess.mu.Lock()
 	wsDir := sess.workingDir
 	model := b.activeModelForSession(sess)
 	sess.mu.Unlock()
 
-	prompt := fmt.Sprintf(
-		`Generate the full content of a README.md file for a project called "%s".
-
-Description: %s
-
-Structure it with these sections:
-# %s
-
-## Purpose
-What this project is about.
-
-## Focus
-The specific topics, sources, and search terms to use.
-
-## Output
-What gets produced (PDF digests, reports, etc.) and how often.
-
-## Data
-Explain that all findings are tracked in data.json to prevent duplicates.
-Include the exact JSON schema:
-{"found": [{"date": "YYYY-MM-DD", "title": "...", "url": "...", "summary": "..."}]}
-
-## Instructions for AI
-Step-by-step instructions to follow on every scheduled run:
-1. Read data.json — note all previously found items
-2. Search the web for new items matching the focus topics
-3. Filter out anything already in data.json
-4. Update data.json with the new findings
-5. Generate a PDF digest covering only the new findings
-6. Keep all files strictly inside the working directory
-
-Return ONLY the markdown content, no explanations.`,
-		name, description, name)
+	prompt := buildReadmePrompt(name, description, opts)
 
 	response, err := b.runClaude(sess.userID, prompt, name, wsDir, model, nil)
 	if err != nil {
@@ -541,6 +597,81 @@ Return ONLY the markdown content, no explanations.`,
 	}
 
 	b.reply(chatID, fmt.Sprintf("Project *%s* ready ✓", name))
+}
+
+// buildReadmePrompt constructs the Claude prompt for README generation based on project options.
+func buildReadmePrompt(name, description string, opts *ProjectOptions) string {
+	if opts != nil && opts.IsResearch {
+		reportStep := "5. Keep all files strictly inside the working directory"
+		if opts.AutoReport {
+			reportStep = "5. Write a `report.md` summarising new findings:\n" +
+				"   - First line: `# " + name + " Digest — [Month Year]`\n" +
+				"   - Group items under `## [Category]` sections\n" +
+				"   - Each item as `### [Title]` with an italic metadata line\n" +
+				"   (The bot converts report.md to a styled PDF automatically)\n" +
+				"6. Keep all files strictly inside the working directory"
+		}
+		return fmt.Sprintf(
+			`Generate the full content of a README.md file for a project called "%s".
+
+Description: %s
+
+Structure it with these sections:
+# %s
+
+## Purpose
+What this research tracks and why.
+
+## Focus
+The specific topics, sources, and search queries to use (list several concrete search strings).
+
+## Output
+What gets produced each run.
+
+## Data
+All findings are tracked in data.json to prevent duplicates.
+Include the exact JSON schema:
+{"found": [{"date": "YYYY-MM-DD", "title": "...", "url": "...", "summary": "..."}]}
+
+## Instructions for AI
+Step-by-step instructions to follow on every run:
+1. Read data.json — note all previously found items
+2. Search the web using the Focus queries (run at least 4–6 searches)
+3. Filter out anything already in data.json
+4. Update data.json with new findings
+%s
+
+Return ONLY the markdown content, no explanations.`,
+			name, description, name, reportStep)
+	}
+
+	// General project
+	reportInstruction := ""
+	if opts != nil && opts.AutoReport {
+		reportInstruction = "\nAfter completing significant work, write a `report.md` summarising what was done:\n" +
+			"- First line: `# " + name + " Report — [Date]`\n" +
+			"- Sections: `## [Topic]`\n" +
+			"(The bot converts report.md to a styled PDF automatically)\n"
+	}
+	return fmt.Sprintf(
+		`Generate the full content of a README.md file for a project called "%s".
+
+Description: %s
+
+Structure it with these sections:
+# %s
+
+## Purpose
+What this project is for.
+
+## Focus
+The specific work, topics, or tasks for this project.
+
+## Instructions for AI
+Guidelines for working in this project.%s
+
+Return ONLY the markdown content, no explanations.`,
+		name, description, name, reportInstruction)
 }
 
 // handleProjectUpdate runs Claude to update the workspace README, then writes it to disk.
@@ -655,6 +786,20 @@ func (b *Bot) runUserMessage(chatID string, sess *Session, text string) {
 	}
 
 	for _, path := range newFiles(wd, before) {
+		if filepath.Base(path) == "report.md" {
+			userBaseDir := userWorkingDir(b.cfg.Backend.WorkingDir, sess.userID)
+			rtmpl, _ := loadReportTemplate(wd, userBaseDir)
+			outPath := strings.TrimSuffix(path, ".md") + "_" + time.Now().Format("2006-01-02") + ".pdf"
+			if err := RenderMarkdownReport(path, outPath, rtmpl); err != nil {
+				b.reply(chatID, fmt.Sprintf("Report render failed: %v", err))
+			} else {
+				b.sendFileAuto(chatID, outPath)
+				if info, err := os.Stat(outPath); err == nil {
+					b.mem.recordFile(sess.userID, ws, filepath.Base(outPath), outPath, info.Size())
+				}
+			}
+			continue
+		}
 		b.sendFileAuto(chatID, path)
 		if info, err := os.Stat(path); err == nil {
 			b.mem.recordFile(sess.userID, ws, filepath.Base(path), path, info.Size())
@@ -830,6 +975,20 @@ func (b *Bot) runScheduledTask(id, userID int64, chatID string, workspace, worki
 	}
 
 	for _, path := range newFiles(wd, before) {
+		if filepath.Base(path) == "report.md" {
+			userBaseDir := userWorkingDir(b.cfg.Backend.WorkingDir, userID)
+			rtmpl, _ := loadReportTemplate(wd, userBaseDir)
+			outPath := strings.TrimSuffix(path, ".md") + "_" + time.Now().Format("2006-01-02") + ".pdf"
+			if err := RenderMarkdownReport(path, outPath, rtmpl); err != nil {
+				b.reply(chatID, fmt.Sprintf("Report render failed: %v", err))
+			} else {
+				b.sendFile(chatID, outPath)
+				if info, err := os.Stat(outPath); err == nil {
+					b.mem.recordFile(userID, workspace, filepath.Base(outPath), outPath, info.Size())
+				}
+			}
+			continue
+		}
 		b.sendFile(chatID, path)
 		if info, err := os.Stat(path); err == nil {
 			b.mem.recordFile(userID, workspace, filepath.Base(path), path, info.Size())
@@ -914,6 +1073,16 @@ func (b *Bot) runClaude(userID int64, prompt, workspace, workingDir, model strin
 			"- All outputs (files, PDFs, data) go here and nowhere else\n"+
 			"- Never mention file paths in your responses",
 		workingDir)
+
+	systemPrompt += "\n\n## Report Generation\n" +
+		"When creating a report, digest, or summary for the user, write it as a markdown\n" +
+		"file named `report.md` in the working directory. Use this structure:\n" +
+		"- First line: # Title of the Report\n" +
+		"- Sections: ## Section Name\n" +
+		"- Sub-items: ### Item Title (optional italic line for metadata)\n" +
+		"- Body paragraphs, bullet lists as normal markdown\n" +
+		"The file will be automatically converted to a styled PDF and sent. Do not call\n" +
+		"any PDF tools directly."
 
 	if readme := readWorkspaceReadme(workingDir); readme != "" {
 		systemPrompt += "\n\n## Workspace Configuration (README.md)\n\n" + readme
@@ -1079,6 +1248,20 @@ func (b *Bot) runSkill(chatID string, sess *Session, skill *Skill, args string) 
 	}
 
 	for _, path := range newFiles(wd, before) {
+		if filepath.Base(path) == "report.md" {
+			userBaseDir := userWorkingDir(b.cfg.Backend.WorkingDir, userID)
+			rtmpl, _ := loadReportTemplate(wd, userBaseDir)
+			outPath := strings.TrimSuffix(path, ".md") + "_" + time.Now().Format("2006-01-02") + ".pdf"
+			if err := RenderMarkdownReport(path, outPath, rtmpl); err != nil {
+				b.reply(chatID, fmt.Sprintf("Report render failed: %v", err))
+			} else {
+				b.sendFileAuto(chatID, outPath)
+				if info, err := os.Stat(outPath); err == nil {
+					b.mem.recordFile(userID, ws, filepath.Base(outPath), outPath, info.Size())
+				}
+			}
+			continue
+		}
 		b.sendFileAuto(chatID, path)
 		if info, err := os.Stat(path); err == nil {
 			b.mem.recordFile(userID, ws, filepath.Base(path), path, info.Size())
@@ -1359,6 +1542,9 @@ func (b *Bot) helpText() string {
 			"/schedule <name> | <cron> | <prompt> — recurring scheduled task\n"+
 			"/schedules — list your scheduled tasks\n"+
 			"/unschedule <id> — remove a scheduled task\n\n"+
+			"*Reports*\n"+
+			"/report — render report.md as a PDF and send it\n"+
+			"Upload template.yaml to a project to customise the report style\n\n"+
 			"*Skills*\n"+
 			"/skills — list loaded custom commands\n"+
 			"/secret set <name> <value> --skill <skill> — store credential for a skill\n"+

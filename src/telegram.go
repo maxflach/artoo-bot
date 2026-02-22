@@ -240,6 +240,7 @@ func (t *TelegramTransport) handleCallback(cb *tgbotapi.CallbackQuery) {
 			return
 		}
 		sess := b.addSession(userID)
+		copyReportTemplate(b.cfg.Backend.WorkingDir, userID)
 		sess.mu.Lock()
 		sess.chatID = tgChatID(userID)
 		sess.mu.Unlock()
@@ -251,6 +252,14 @@ func (t *TelegramTransport) handleCallback(cb *tgbotapi.CallbackQuery) {
 		fmt.Sscanf(strings.TrimPrefix(data, "deny:"), "%d", &userID)
 		b.reply(adminChatID, "❌ Request denied.")
 		b.reply(tgChatID(userID), "Sorry, access not granted.")
+
+	} else if strings.HasPrefix(data, "projsetup:") {
+		// projsetup:<token>:<field>:<value>
+		parts := strings.SplitN(strings.TrimPrefix(data, "projsetup:"), ":", 3)
+		if len(parts) == 3 {
+			t.handleProjectSetupCallback(cb, parts[0], parts[1], parts[2])
+		}
+		return
 
 	} else if strings.HasPrefix(data, "delschedule:") {
 		var scheduleID int64
@@ -290,6 +299,28 @@ func (t *TelegramTransport) handleFileUpload(chatID string, sess *Session, doc *
 	ws := sess.workspace
 	model := b.activeModelForSession(sess)
 	sess.mu.Unlock()
+
+	// Template and logo uploads are saved directly without Claude extraction.
+	if doc.FileName == "template.yaml" || doc.FileName == "logo.png" {
+		fileConfig := tgbotapi.FileConfig{FileID: doc.FileID}
+		file, err := t.api.GetFile(fileConfig)
+		if err != nil {
+			b.reply(chatID, fmt.Sprintf("Failed to get file: %v", err))
+			return
+		}
+		url := file.Link(b.cfg.Telegram.Token)
+		destPath := filepath.Join(wd, doc.FileName)
+		if _, err := downloadURL(url, destPath); err != nil {
+			b.reply(chatID, fmt.Sprintf("Failed to download: %v", err))
+			return
+		}
+		wsLabel := ws
+		if wsLabel == "global" {
+			wsLabel = "your default"
+		}
+		b.reply(chatID, fmt.Sprintf("Report template updated for project *%s* ✓", wsLabel))
+		return
+	}
 
 	b.reply(chatID, fmt.Sprintf("Received *%s* — saving to project...", doc.FileName))
 
@@ -337,4 +368,52 @@ Structure it clearly with headings. This file will serve as project memory/conte
 
 	b.mem.recordFile(sess.userID, ws, doc.FileName, destPath, int64(doc.FileSize))
 	b.reply(chatID, fmt.Sprintf("*%s* added to project ✓\n\n%s", doc.FileName, response))
+}
+
+// handleProjectSetupCallback processes button answers for interactive project creation.
+func (t *TelegramTransport) handleProjectSetupCallback(cb *tgbotapi.CallbackQuery, token, field, value string) {
+	b := t.bot
+	t.api.Request(tgbotapi.NewCallback(cb.ID, ""))
+
+	b.pendingProjectsMu.Lock()
+	pending, ok := b.pendingProjects[token]
+	b.pendingProjectsMu.Unlock()
+	if !ok {
+		return
+	}
+
+	// Clear buttons from the answered message.
+	if cb.Message != nil {
+		t.api.Request(tgbotapi.NewEditMessageReplyMarkup(
+			cb.Message.Chat.ID, cb.Message.MessageID, tgbotapi.InlineKeyboardMarkup{}))
+	}
+
+	switch field {
+	case "research":
+		pending.IsResearch = value == "yes"
+		pending.Step = 2
+		_, localChatID := splitChatID(pending.ChatID)
+		t.SendWithButtons(localChatID, "Auto-generate PDF reports after each run?", []Button{
+			{Label: "Yes — send PDF", Data: fmt.Sprintf("projsetup:%s:report:yes", token)},
+			{Label: "No thanks", Data: fmt.Sprintf("projsetup:%s:report:no", token)},
+		})
+
+	case "report":
+		pending.AutoReport = value == "yes"
+		b.pendingProjectsMu.Lock()
+		delete(b.pendingProjects, token)
+		b.pendingProjectsMu.Unlock()
+
+		b.reply(pending.ChatID, fmt.Sprintf("Writing README for *%s*...", pending.Name))
+		sess := b.getSession(pending.UserID)
+		if sess == nil {
+			return
+		}
+		// Point the session at the project dir so generateWorkspaceReadme uses it.
+		sess.mu.Lock()
+		sess.workingDir = pending.WorkingDir
+		sess.mu.Unlock()
+		opts := &ProjectOptions{IsResearch: pending.IsResearch, AutoReport: pending.AutoReport}
+		go b.generateWorkspaceReadme(pending.ChatID, sess, pending.Name, pending.Description, opts)
+	}
 }

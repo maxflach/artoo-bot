@@ -112,6 +112,45 @@ RUNSH
     echo "Demo skill installed: /imagine"
 fi
 
+# ── Report template ────────────────────────────────────────────────────────────
+TMPL_DIR="$HOME/.config/bot/report-template"
+if [ ! -f "$TMPL_DIR/template.yaml" ]; then
+    echo "Installing default report template..."
+    mkdir -p "$TMPL_DIR"
+    cat > "$TMPL_DIR/template.yaml" << 'TMPL'
+# Artoo Reports — Template Configuration
+# Edit this file to customise the look of all generated reports.
+# Upload a modified template.yaml to any project via Telegram to override per-project.
+
+cover:
+  background_color: "#0f0f23"   # dark navy background
+  title_color:      "#ffffff"
+  subtitle_color:   "#aaaaaa"   # date / subtitle line
+  accent_color:     "#4a9eff"   # decorative bar under title
+  logo:             ""          # absolute path to PNG logo, or empty
+
+body:
+  font_size:        11
+  h2_color:         "#2d3561"
+  h3_color:         "#555588"
+  text_color:       "#333333"
+  bullet_color:     "#4a9eff"   # colour of bullet points
+
+header:
+  text:             "Artoo Reports"
+  color:            "#aaaaaa"
+
+footer:
+  left:             "Artoo Reports"
+  show_page_numbers: true
+  color:            "#aaaaaa"
+
+brand:
+  name:             "Artoo Reports"
+TMPL
+    echo "Report template installed: $TMPL_DIR/template.yaml"
+fi
+
 # ── macOS ──────────────────────────────────────────────────────────────────────
 if [ "$OS" = "Darwin" ]; then
     LABEL="com.bot.claude.$INSTANCE"

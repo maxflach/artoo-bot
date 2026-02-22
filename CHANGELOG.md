@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.7 — 2026-02-22
+
+### Added
+- **Artoo Reports — PDF template system** — Claude writes `report.md`; the bot auto-detects it and renders a styled PDF using a pure-Go renderer (no external tools required, works everywhere)
+- **`src/pdf.go`** — new file: `ReportTemplate` struct hierarchy, `loadReportTemplate()`, `RenderMarkdownReport()`; goldmark parses markdown AST; fpdf renders cover page + body pages
+- **Cover page** — full-page branded background, accent bar, title from H1, date, optional logo, brand name; no header/footer on cover
+- **Body rendering** — H2 section headers with rule lines, H3 sub-headers, inline bold/italic/code spans, bullet and numbered lists with accent-coloured markers, fenced code blocks, blockquotes, thematic breaks
+- **Template priority chain** — templates resolve from most to least specific: `<projectDir>/template.yaml` → `<userBaseDir>/template.yaml` → `~/.config/bot/report-template/template.yaml` → hardcoded defaults
+- **Template upload via Telegram** — upload `template.yaml` or `logo.png` to a project and the bot saves it directly (no Claude extraction); confirms "Report template updated for project X ✓"
+- **Template provisioning** — new users receive a copy of the global template in their base dir when approved; `install.sh` creates `~/.config/bot/report-template/template.yaml` on first install
+- **`/report` command** — manually render `report.md` in the current project to PDF and send it; `/report reload` confirms templates load fresh per-render
+- **Report instructions in system prompt** — Claude is told to write `report.md` (not call PDF tools) when producing digests or summaries; format instructions included
+- **`report.md` intercepted in all file-send loops** — `runUserMessage`, `runSkill`, and `runScheduledTask` all auto-render and send the PDF, skipping the raw `.md`
+- **Interactive project setup** — `/project <name> | <description>` now asks two button questions on Telegram before generating the README: "Does this project involve web research?" and "Auto-generate PDF reports after each run?"; README is tailored to the answers; non-Telegram transports fall back to immediate generation
+- **`buildReadmePrompt()`** — generates context-appropriate README prompts based on project type (research vs general) and auto-report preference
+
+### Changed
+- `generateWorkspaceReadme()` accepts a `*ProjectOptions` parameter; callers that don't need options pass `nil` for backward-compatible behaviour
+- MusicDataLabs README updated: Step 5 now writes `report.md` in the standard digest format instead of a hand-crafted PDF
+
+### New dependencies
+- `github.com/go-pdf/fpdf v0.9.0` — pure-Go PDF generation
+- `github.com/yuin/goldmark v1.7.16` — CommonMark-compliant markdown parser
+
+---
+
 ## v0.6 — 2026-02-22
 
 ### Added

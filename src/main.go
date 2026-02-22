@@ -726,12 +726,44 @@ var ackPhrases = []string{
 	"Stand by...", "Working on it...", "Roger that...",
 }
 
+// slowAckPhrases are used when the request looks like it will take a while.
+var slowAckPhrases = []string{
+	"On it — this might take a few minutes...",
+	"On it — this could take a little while...",
+	"Working on it — might be a few minutes...",
+	"On it, bear with me — this one may take a while...",
+}
+
+// slowKeywords are terms that suggest a long-running task.
+var slowKeywords = []string{
+	"research", "search", "find", "look up", "look for",
+	"digest", "report", "summary", "summarise", "summarize",
+	"scan", "scrape", "fetch", "download", "crawl",
+	"all ", "every ", "full ", "entire ", "complete ",
+	"week", "month", "year", "history", "historical",
+	"analyse", "analyze", "audit", "review all",
+	"generate", "write a report", "write a summary",
+	"update data", "run the", "scheduled",
+}
+
 var ackIdx int
 
 func nextAck() string {
 	p := ackPhrases[ackIdx%len(ackPhrases)]
 	ackIdx++
 	return p
+}
+
+// ackForPrompt returns an ack phrase, using a "may take a while" variant if
+// the prompt contains keywords that suggest a long-running task.
+func ackForPrompt(prompt string) string {
+	lower := strings.ToLower(prompt)
+	for _, kw := range slowKeywords {
+		if strings.Contains(lower, kw) {
+			return slowAckPhrases[ackIdx%len(slowAckPhrases)]
+		}
+	}
+	return nextAck()
 }
 
 // runUserMessage handles plain text messages sent to Claude.
@@ -766,9 +798,11 @@ func (b *Bot) runUserMessage(chatID string, sess *Session, text string) {
 	copy(hist, sess.history)
 	sess.mu.Unlock()
 
-	ack := "_" + nextAck() + "_"
+	phrase := ackForPrompt(text)
+	ackIdx++ // advance for next call
+	ack := "_" + phrase + "_"
 	if ws != "global" {
-		ack = fmt.Sprintf("_[%s] %s_", ws, nextAck())
+		ack = fmt.Sprintf("_[%s] %s_", ws, phrase)
 	}
 	b.reply(chatID, ack)
 

@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.7.1 — 2026-02-22
+
+### Fixed
+- **PDF encoding** — UTF-8 typographic characters (em dash, curly quotes, ellipsis, non-breaking space) now map to their Windows-1252 equivalents before being passed to fpdf, so they render correctly in all built-in fonts instead of appearing as `â€"`
+- **Blank page 2** — explicit `pdf.SetY(25)` after `AddPage()` for the body page prevents the cover-page Y state (286mm) from carrying into body rendering and triggering an immediate auto-page-break
+
+### Changed
+- **Slow-task acks** — messages containing research/search/report/scan/generate/all/full/week/month keywords now receive a "this might take a few minutes" acknowledgment variant instead of the standard quick ack
+
+---
+
 ## v0.7 — 2026-02-22
 
 ### Added

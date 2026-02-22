@@ -135,6 +135,24 @@ func hexToRGB(hex string) (int, int, int) {
 	return r, g, b
 }
 
+// pdfText converts a UTF-8 string to Windows-1252 so fpdf's built-in fonts
+// render typographic characters (em dash, curly quotes, ellipsis, etc.) correctly.
+var win1252 = strings.NewReplacer(
+	"\u2014", "\x97", // em dash —
+	"\u2013", "\x96", // en dash –
+	"\u2019", "\x92", // right single quote '
+	"\u2018", "\x91", // left single quote '
+	"\u201C", "\x93", // left double quote "
+	"\u201D", "\x94", // right double quote "
+	"\u2026", "\x85", // ellipsis …
+	"\u00A0", " ",    // non-breaking space
+	"\u2022", "\x95", // bullet •
+)
+
+func pdfText(s string) string {
+	return win1252.Replace(s)
+}
+
 // styledSpan is a run of text with optional inline formatting.
 type styledSpan struct {
 	text   string
@@ -265,10 +283,9 @@ func RenderMarkdownReport(mdPath, outPath string, tmpl *ReportTemplate) error {
 		pdf.SetFont("Helvetica", "", 8)
 		pdf.SetTextColor(r, g, b)
 		pdf.SetXY(0, 8)
-		pdf.CellFormat(210, 5, headerText, "", 1, "C", false, 0, "")
+		pdf.CellFormat(210, 5, pdfText(headerText), "", 1, "C", false, 0, "")
 		pdf.SetDrawColor(r, g, b)
 		pdf.Line(20, 15, 190, 15)
-		pdf.SetY(25)
 	})
 
 	pdf.SetFooterFunc(func() {
@@ -282,7 +299,7 @@ func RenderMarkdownReport(mdPath, outPath string, tmpl *ReportTemplate) error {
 		pdf.SetDrawColor(r, g, b)
 		pdf.Line(20, pdf.GetY()-2, 190, pdf.GetY()-2)
 		pdf.SetX(20)
-		pdf.Cell(90, 5, footerLeft)
+		pdf.Cell(90, 5, pdfText(footerLeft))
 		if footerPages {
 			// Body starts at page 2, so display as page N-1.
 			pdf.CellFormat(80, 5, fmt.Sprintf("Page %d", pdf.PageNo()-1), "", 0, "R", false, 0, "")
@@ -293,6 +310,7 @@ func RenderMarkdownReport(mdPath, outPath string, tmpl *ReportTemplate) error {
 
 	if len(bodyNodes) > 0 {
 		pdf.AddPage()
+		pdf.SetY(25) // ensure body starts at content top after cover page state
 		renderBodyNodes(pdf, bodyNodes, source, tmpl, fontSize, lineH)
 	}
 
@@ -330,7 +348,7 @@ func renderCoverPage(pdf *fpdf.Fpdf, title string, tmpl *ReportTemplate) {
 	pdf.SetTextColor(tr, tg, tb)
 	pdf.SetFont("Helvetica", "B", 26)
 	pdf.SetXY(20, y)
-	pdf.MultiCell(170, 11, title, "", "L", false)
+	pdf.MultiCell(170, 11, pdfText(title), "", "L", false)
 	y = pdf.GetY() + 6
 
 	// Date subtitle.
@@ -343,7 +361,7 @@ func renderCoverPage(pdf *fpdf.Fpdf, title string, tmpl *ReportTemplate) {
 	// Brand name at bottom right.
 	pdf.SetFont("Helvetica", "", 9)
 	pdf.SetXY(20, 278)
-	pdf.CellFormat(170, 8, tmpl.Brand.Name, "", 0, "R", false, 0, "")
+	pdf.CellFormat(170, 8, pdfText(tmpl.Brand.Name), "", 0, "R", false, 0, "")
 }
 
 func renderBodyNodes(pdf *fpdf.Fpdf, nodes []ast.Node, source []byte, tmpl *ReportTemplate, fontSize, lineH float64) {
@@ -375,7 +393,7 @@ func renderBodyNodes(pdf *fpdf.Fpdf, nodes []ast.Node, source []byte, tmpl *Repo
 			pdf.Ln(3)
 
 		case *ast.Blockquote:
-			qt := extractPlainText(n, source)
+			qt := pdfText(extractPlainText(n, source))
 			cr, cg, cb := hexToRGB("#666666")
 			pdf.SetTextColor(cr, cg, cb)
 			pdf.SetFont("Helvetica", "I", fontSize)
@@ -387,7 +405,7 @@ func renderBodyNodes(pdf *fpdf.Fpdf, nodes []ast.Node, source []byte, tmpl *Repo
 }
 
 func renderHeading(pdf *fpdf.Fpdf, h *ast.Heading, source []byte, tmpl *ReportTemplate, baseFontSize float64) {
-	headingText := extractPlainText(h, source)
+	headingText := pdfText(extractPlainText(h, source))
 	switch h.Level {
 	case 2:
 		pdf.Ln(6)
@@ -442,7 +460,7 @@ func renderParagraph(pdf *fpdf.Fpdf, n ast.Node, source []byte, tmpl *ReportTemp
 		default:
 			pdf.SetFont("Helvetica", "", fontSize)
 		}
-		pdf.Write(lineH, span.text)
+		pdf.Write(lineH, pdfText(span.text))
 	}
 	pdf.Ln(lineH + 2)
 }
@@ -457,7 +475,7 @@ func renderList(pdf *fpdf.Fpdf, list *ast.List, source []byte, tmpl *ReportTempl
 	br, bg, bb := hexToRGB(tmpl.Body.BulletColor)
 
 	for item := list.FirstChild(); item != nil; item = item.NextSibling() {
-		itemText := extractPlainText(item, source)
+		itemText := pdfText(extractPlainText(item, source))
 		if itemText == "" {
 			continue
 		}

@@ -6,6 +6,9 @@
 - **Path display privacy** — working directory shown to Claude now uses `~/project` shorthand instead of the full absolute path, preventing the host username, instance name, and user ID from leaking into responses. `~` in README and memory content still expands to the OS home directory for file operations.
 - **Wishlist** — `/wish <message>` lets any approved user submit feature requests; `/wishes` (admin) lists all submissions with username; `/wishes done <id>` marks a wish as acknowledged
 
+### Fixed
+- **`/v1/run` workspace path** — `projectDir()` was called with `sess.workingDir` (already inside a project), causing double-nesting (e.g. `MusicDataLabs/MusicDataLabs`). Now uses `userWorkingDir()` as the base.
+
 ---
 
 ## v0.7.1 — 2026-02-22

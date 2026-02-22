@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.5 — 2026-02-22
+
+### Added
+- **System secrets** — admin can provision API keys shared across all users with `/secret set --system <name> <value> --skill <skill>`; stored as `user_id=0` in the database
+- **Full secret priority chain** — system (lowest) → user global → user project (highest); more specific values always win
+- **`/secret del --system`** — admin can remove system secrets
+- **`/secret list`** shows system secrets to the admin alongside their own
+
+### Changed
+- Secret merge query updated to include `user_id=0` rows in a single pass with correct priority ordering
+
+---
+
 ## v0.4 — 2026-02-22
 
 ### Added

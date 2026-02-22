@@ -60,6 +60,58 @@ JOKES
     echo "Demo skill installed: /dadjoke"
 fi
 
+IMAGINE_DIR="$HOME/.config/bot/skills/imagine"
+if [ ! -d "$IMAGINE_DIR" ]; then
+    echo "Installing imagine demo skill..."
+    mkdir -p "$IMAGINE_DIR"
+    cat > "$IMAGINE_DIR/run.sh" << 'RUNSH'
+#!/bin/bash
+# Generate an image using Google Gemini Imagen API
+# Requires: /secret set GEMINI_API_KEY <key> --skill imagine
+
+PROMPT="$*"
+if [ -z "$PROMPT" ]; then
+  echo "Usage: /imagine <prompt>"
+  exit 1
+fi
+
+if [ -z "$ARTOO_SECRET_GEMINI_API_KEY" ]; then
+  echo "No Gemini API key. Run: /secret set GEMINI_API_KEY <your-key> --skill imagine"
+  exit 1
+fi
+
+if [ -z "$ARTOO_WD" ]; then
+  echo "Error: ARTOO_WD not set."
+  exit 1
+fi
+
+OUTPUT="$ARTOO_WD/imagine_$(date +%s).png"
+
+python3 <<PYEOF
+import urllib.request, json, base64, os, sys
+
+key = os.environ['ARTOO_SECRET_GEMINI_API_KEY']
+prompt = """$PROMPT"""
+output = "$OUTPUT"
+
+url = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-011:predict?key={key}"
+body = json.dumps({"instances": [{"prompt": prompt}], "parameters": {"sampleCount": 1}})
+req = urllib.request.Request(url, body.encode(), {"Content-Type": "application/json"})
+try:
+    resp = json.loads(urllib.request.urlopen(req).read())
+    img_b64 = resp["predictions"][0]["bytesBase64Encoded"]
+    with open(output, "wb") as f:
+        f.write(base64.b64decode(img_b64))
+    print(f"Image generated.")
+except Exception as e:
+    print(f"Error: {e}", file=sys.stderr)
+    sys.exit(1)
+PYEOF
+RUNSH
+    chmod +x "$IMAGINE_DIR/run.sh"
+    echo "Demo skill installed: /imagine"
+fi
+
 # ── macOS ──────────────────────────────────────────────────────────────────────
 if [ "$OS" = "Darwin" ]; then
     LABEL="com.bot.claude.$INSTANCE"

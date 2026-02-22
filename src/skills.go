@@ -107,8 +107,9 @@ func discoverFileSkill(skills map[string]*Skill, filename, path, dir string) {
 }
 
 // dispatchSkill runs a skill and returns the output.
+// extraEnv is injected as additional environment variables for script skills.
 // For prompt-type skills, runFn is called with the assembled prompt.
-func (b *Bot) dispatchSkill(skill *Skill, input string, runFn func(string) (string, error)) (string, error) {
+func (b *Bot) dispatchSkill(skill *Skill, input string, extraEnv map[string]string, runFn func(string) (string, error)) (string, error) {
 	switch skill.Type {
 	case "script":
 		args := []string{}
@@ -117,6 +118,10 @@ func (b *Bot) dispatchSkill(skill *Skill, input string, runFn func(string) (stri
 		}
 		cmd := exec.Command(skill.Path, args...)
 		cmd.Dir = skill.Dir
+		cmd.Env = os.Environ()
+		for k, v := range extraEnv {
+			cmd.Env = append(cmd.Env, k+"="+v)
+		}
 		out, err := cmd.Output()
 		if err != nil {
 			detail := ""

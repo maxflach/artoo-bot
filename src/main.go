@@ -44,6 +44,7 @@ type Bot struct {
 	sessions   map[int64]*Session
 	skillsMu   sync.RWMutex
 	skills     map[string]*Skill
+	secretKey  []byte
 }
 
 func newBot(cfg *Config) (*Bot, error) {
@@ -77,12 +78,18 @@ func newBot(cfg *Config) (*Bot, error) {
 		sessions[id] = newSession(id, cfg.Backend.WorkingDir, mem)
 	}
 
+	secretKey, err := loadSecretKey()
+	if err != nil {
+		return nil, fmt.Errorf("secret key: %w", err)
+	}
+
 	b := &Bot{
 		cfg:        cfg,
 		api:        api,
 		allowedIDs: allowed,
 		mem:        mem,
 		sessions:   sessions,
+		secretKey:  secretKey,
 	}
 	b.cron = newCronRunner(b)
 	b.skills = loadSkills(skillPaths(""))
@@ -327,6 +334,9 @@ func (b *Bot) handleCommand(chatID int64, sess *Session, text string) {
 
 	case "skills":
 		b.handleSkillsCommand(chatID, sess, args)
+
+	case "secret":
+		b.handleSecretCommand(chatID, sess, args)
 
 	default:
 		b.skillsMu.RLock()
@@ -1106,6 +1116,8 @@ func (b *Bot) handleAPIKey(chatID int64, cmd, args string) {
 }
 
 // runSkill dispatches a skill command for a user.
+// It injects per-skill secrets as ARTOO_SECRET_* env vars and ARTOO_WD,
+// then sends any new files created by the skill back to the user.
 func (b *Bot) runSkill(chatID int64, sess *Session, skill *Skill, args string) {
 	sess.mu.Lock()
 	userID := sess.userID
@@ -1118,16 +1130,183 @@ func (b *Bot) runSkill(chatID int64, sess *Session, skill *Skill, args string) {
 
 	b.reply(chatID, "_"+nextAck()+"_")
 
+	before := snapshotFiles(wd)
+
+	// Build extraEnv: ARTOO_WD + secrets scoped to this skill
+	extraEnv := map[string]string{"ARTOO_WD": wd}
+	encSecrets, err := b.mem.getSecretsForSkill(userID, "*", ws, skill.Name)
+	if err == nil {
+		for name, encVal := range encSecrets {
+			plain, err := decryptSecret(b.secretKey, encVal)
+			if err == nil {
+				extraEnv["ARTOO_SECRET_"+name] = plain
+			}
+		}
+	}
+
 	runFn := func(prompt string) (string, error) {
 		return b.runClaude(userID, prompt, ws, wd, model, hist)
 	}
-	result, err := b.dispatchSkill(skill, args, runFn)
+	result, err := b.dispatchSkill(skill, args, extraEnv, runFn)
 	if err != nil {
 		b.reply(chatID, fmt.Sprintf("Skill error: %v", err))
 		return
 	}
-	for _, chunk := range splitMessage(result, maxMsgLen) {
-		b.reply(chatID, chunk)
+	if result != "" && result != "(no output)" {
+		for _, chunk := range splitMessage(result, maxMsgLen) {
+			b.reply(chatID, chunk)
+		}
+	}
+
+	for _, path := range newFiles(wd, before) {
+		b.sendFileAuto(chatID, path)
+		if info, err := os.Stat(path); err == nil {
+			b.mem.recordFile(userID, ws, filepath.Base(path), path, info.Size())
+		}
+	}
+}
+
+// handleSecretCommand handles /secret set|list|del subcommands.
+func (b *Bot) handleSecretCommand(chatID int64, sess *Session, args string) {
+	usage := "Usage:\n" +
+		"`/secret set <name> <value> --skill <skill>` — store for current project\n" +
+		"`/secret set --global <name> <value> --skill <skill>` — store for all projects\n" +
+		"`/secret list` — show key names in current project + global\n" +
+		"`/secret del <name>` — delete from current project\n" +
+		"`/secret del --global <name>` — delete from global scope"
+
+	if args == "" {
+		b.reply(chatID, usage)
+		return
+	}
+
+	parts := strings.SplitN(args, " ", 2)
+	sub := parts[0]
+	rest := ""
+	if len(parts) > 1 {
+		rest = strings.TrimSpace(parts[1])
+	}
+
+	sess.mu.Lock()
+	ws := sess.workspace
+	sess.mu.Unlock()
+
+	switch sub {
+	case "set":
+		global, skillName, positional := parseSecretFlags(rest)
+		if len(positional) < 2 {
+			b.reply(chatID, "Usage: `/secret set [--global] <name> <value> --skill <skill>`")
+			return
+		}
+		if skillName == "" {
+			b.reply(chatID, "Missing `--skill <name>`. Secrets must be locked to a specific skill.\n\nExample: `/secret set GEMINI_API_KEY mykey --skill imagine`")
+			return
+		}
+		name := positional[0]
+		value := positional[1]
+		scope := ws
+		if global {
+			scope = "*"
+		}
+		encVal, err := encryptSecret(b.secretKey, value)
+		if err != nil {
+			b.reply(chatID, fmt.Sprintf("Encryption error: %v", err))
+			return
+		}
+		if err := b.mem.setSecret(sess.userID, scope, name, encVal, skillName); err != nil {
+			b.reply(chatID, fmt.Sprintf("Failed to save secret: %v", err))
+			return
+		}
+		scopeLabel := fmt.Sprintf("project *%s*", scope)
+		if scope == "*" {
+			scopeLabel = "all projects (global)"
+		}
+		b.reply(chatID, fmt.Sprintf("Secret `%s` saved for %s, skill: `%s` ✓", name, scopeLabel, skillName))
+
+	case "list":
+		entries, err := b.mem.listSecrets(sess.userID, ws)
+		if err != nil || len(entries) == 0 {
+			b.reply(chatID, "No secrets stored for this project.")
+			return
+		}
+		var lines []string
+		for _, e := range entries {
+			scopeLabel := fmt.Sprintf("project: %s", e.Scope)
+			if e.Scope == "*" {
+				scopeLabel = "global"
+			}
+			lines = append(lines, fmt.Sprintf("• `%s` — skill: `%s` (%s)", e.Name, e.AllowedSkill, scopeLabel))
+		}
+		b.reply(chatID, "*Secrets:*\n"+strings.Join(lines, "\n"))
+
+	case "del", "delete", "rm":
+		global, _, positional := parseSecretFlags(rest)
+		if len(positional) == 0 {
+			b.reply(chatID, "Usage: `/secret del [--global] <name>`")
+			return
+		}
+		name := positional[0]
+		scope := ws
+		if global {
+			scope = "*"
+		}
+		if err := b.mem.deleteSecret(sess.userID, scope, name); err != nil {
+			b.reply(chatID, fmt.Sprintf("Failed: %v", err))
+			return
+		}
+		b.reply(chatID, fmt.Sprintf("Secret `%s` deleted ✓", name))
+
+	default:
+		b.reply(chatID, usage)
+	}
+}
+
+// parseSecretFlags parses --global and --skill flags from a secret subcommand args string.
+// Returns (isGlobal, skillName, positionalArgs).
+func parseSecretFlags(args string) (global bool, skillName string, positional []string) {
+	fields := strings.Fields(args)
+	i := 0
+	for i < len(fields) {
+		switch fields[i] {
+		case "--global":
+			global = true
+			i++
+		case "--skill":
+			if i+1 < len(fields) {
+				skillName = fields[i+1]
+				i += 2
+			} else {
+				i++
+			}
+		default:
+			positional = append(positional, fields[i])
+			i++
+		}
+	}
+	return
+}
+
+// sendFileAuto sends a file as a photo if it's an image, otherwise as a document.
+func (b *Bot) sendFileAuto(chatID int64, path string) {
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".png", ".jpg", ".jpeg", ".webp":
+		f, err := os.Open(path)
+		if err != nil {
+			log.Printf("failed to open image %s: %v", path, err)
+			return
+		}
+		defer f.Close()
+		photo := tgbotapi.NewPhoto(chatID, tgbotapi.FileReader{
+			Name:   filepath.Base(path),
+			Reader: f,
+		})
+		if _, err := b.api.Send(photo); err != nil {
+			log.Printf("failed to send photo %s, falling back to document: %v", path, err)
+			b.sendFile(chatID, path)
+		}
+	default:
+		b.sendFile(chatID, path)
 	}
 }
 
@@ -1218,6 +1397,11 @@ func (b *Bot) helpText() string {
 			"/unschedule <id> — remove a scheduled task\n\n"+
 			"*Skills*\n"+
 			"/skills — list loaded custom commands\n"+
+			"/secret set <name> <value> --skill <skill> — store credential for a skill\n"+
+			"/secret set --global <name> <value> --skill <skill> — store for all projects\n"+
+			"/secret list — show stored secret names\n"+
+			"/secret del <name> — remove a secret\n\n"+
+			"*Legacy Skills*\n"+
 			"/skills reload — reload skills from disk (admin)\n\n"+
 			"*Examples*\n"+
 			"_what's in my downloads folder?_\n"+

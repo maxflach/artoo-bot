@@ -111,6 +111,7 @@ func newMemoryStore() (*MemoryStore, error) {
 	ms := &MemoryStore{db: db}
 	ms.initUserStateTable()
 	ms.initAPIKeysTable()
+	ms.initSecretsTable()
 	return ms, nil
 }
 
@@ -582,4 +583,104 @@ func humanSize(b int64) string {
 	default:
 		return fmt.Sprintf("%.1fMB", float64(b)/(1024*1024))
 	}
+}
+
+// --- Secrets ---
+
+func (m *MemoryStore) initSecretsTable() {
+	m.db.Exec(`CREATE TABLE IF NOT EXISTS secrets (
+		id            INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id       INTEGER NOT NULL,
+		scope         TEXT NOT NULL,
+		name          TEXT NOT NULL,
+		value_enc     TEXT NOT NULL,
+		allowed_skill TEXT NOT NULL DEFAULT '',
+		created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE(user_id, scope, name)
+	)`)
+}
+
+// setSecret stores an encrypted secret value for a user.
+// scope is "*" for global or the workspace name for project-scoped.
+// allowedSkill is the skill name that may access this secret.
+func (m *MemoryStore) setSecret(userID int64, scope, name, encValue, allowedSkill string) error {
+	_, err := m.db.Exec(
+		`INSERT INTO secrets (user_id, scope, name, value_enc, allowed_skill) VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(user_id, scope, name) DO UPDATE SET value_enc=excluded.value_enc, allowed_skill=excluded.allowed_skill`,
+		userID, scope, name, encValue, allowedSkill,
+	)
+	return err
+}
+
+// getSecretsForSkill returns encrypted secret values available to a specific skill.
+// Merges scope="*" (global) and projectScope, with project overriding global.
+// Only secrets whose allowed_skill matches skillName are returned.
+func (m *MemoryStore) getSecretsForSkill(userID int64, globalScope, projectScope, skillName string) (map[string]string, error) {
+	scopes := []interface{}{userID, globalScope, projectScope, skillName}
+	rows, err := m.db.Query(
+		`SELECT scope, name, value_enc FROM secrets
+		 WHERE user_id = ? AND scope IN (?, ?) AND allowed_skill = ?
+		 ORDER BY scope ASC`,
+		scopes...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[string]string)
+	for rows.Next() {
+		var scope, name, encValue string
+		if err := rows.Scan(&scope, &name, &encValue); err != nil {
+			continue
+		}
+		result[name] = encValue // later rows (project scope) override earlier (global)
+	}
+	return result, nil
+}
+
+type secretEntry struct {
+	Name         string
+	Scope        string
+	AllowedSkill string
+}
+
+// listSecrets returns secret names (never values) visible in the given scopes.
+func (m *MemoryStore) listSecrets(userID int64, projectScope string) ([]secretEntry, error) {
+	rows, err := m.db.Query(
+		`SELECT name, scope, allowed_skill FROM secrets
+		 WHERE user_id = ? AND scope IN ('*', ?)
+		 ORDER BY scope ASC, name ASC`,
+		userID, projectScope,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var entries []secretEntry
+	for rows.Next() {
+		var e secretEntry
+		if err := rows.Scan(&e.Name, &e.Scope, &e.AllowedSkill); err != nil {
+			continue
+		}
+		entries = append(entries, e)
+	}
+	return entries, nil
+}
+
+// deleteSecret removes a secret for a user in the given scope.
+func (m *MemoryStore) deleteSecret(userID int64, scope, name string) error {
+	res, err := m.db.Exec(
+		`DELETE FROM secrets WHERE user_id = ? AND scope = ? AND name = ?`,
+		userID, scope, name,
+	)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("secret %q not found in scope %q", name, scope)
+	}
+	return nil
 }

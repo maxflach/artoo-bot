@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(push-status done:*)",
+      "Bash(git:*)",
+      "Bash(cd /Users/max/code/bot/src && go build -o ../bot . 2>&1)",
+      "Bash(go build:*)",
+      "Bash(ls /Users/max/code/bot/src/*.go && go build -o ../bot . 2>&1)"
+    ]
+  }
+}

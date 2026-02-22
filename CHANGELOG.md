@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.4 — 2026-02-22
+
+### Added
+- **Secrets vault** — store named credentials encrypted at rest in SQLite; secrets are injected as `ARTOO_SECRET_*` env vars when skills run, never passed to Claude
+- **AES-256-GCM encryption** — each secret value encrypted with a random nonce; 32-byte master key generated once and stored at `~/.config/bot/<instance>/secrets.key` (mode 0600); key is never in the database
+- **Skill-locked secrets** — `--skill <name>` required on every `/secret set`; a secret can only be injected into the specific skill it was locked to — no other skill can access it, even in the same project
+- **Secret scoping** — secrets are either project-scoped (default) or global (`--global`); global secrets are available across all your projects, project-scoped ones only in their project; project values override global ones for the same key name
+- **`ARTOO_WD` env var** — skills receive their current working directory; files written there are auto-detected and sent back to the user
+- **Auto file delivery for skills** — after a skill runs, any new files in the working directory are sent via Telegram; images (PNG/JPG) sent as photos, everything else as documents
+- **`/secret` command** — full CRUD for secrets: `set`, `list`, `del`; values are never shown in responses, only key names
+- **Demo skill: `imagine`** — generates images via Google Gemini Imagen API; saves PNG to working dir, bot sends it as a photo; requires `/secret set GEMINI_API_KEY <key> --skill imagine`; installed automatically by `install.sh`
+
+### Changed
+- `dispatchSkill()` now accepts an `extraEnv map[string]string` for secret injection into script skills
+- `runSkill()` now snapshots the working directory before execution and sends any new files after
+
+---
+
 ## v0.3 — 2026-02-22
 
 ### Added

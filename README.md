@@ -25,6 +25,8 @@ A few other things that mattered to me:
 
 v0.3 added a skills system and a local MCP server — drop a script or markdown file into a `skills/` folder to create new `/commands`, no code changes needed. Skills are also exposed as MCP tools Claude can call mid-task.
 
+v0.4 adds a secrets vault. Skills can now declare which credentials they need, store them encrypted, and receive them as environment variables at runtime — without ever exposing values to Claude or other skills.
+
 ---
 
 ## How It Compares to OpenClaw
@@ -202,6 +204,11 @@ Send any plain text message — it goes straight to your configured agentic CLI,
 | `/unschedule <id>` | Remove a scheduled task |
 | `/skills` | List loaded custom skill commands |
 | `/skills reload` | Reload skills from disk without restarting _(admin only)_ |
+| `/secret set <name> <value> --skill <skill>` | Store a credential, locked to a specific skill |
+| `/secret set --global <name> <value> --skill <skill>` | Store a credential available in all projects |
+| `/secret list` | Show stored secret names (values never shown) |
+| `/secret del <name>` | Delete a secret from the current project |
+| `/secret del --global <name>` | Delete a global secret |
 | `/new` | Fresh start — clear history and reset to global |
 | `/clear` | Clear conversation history only |
 | `/help` | Show all commands |
@@ -297,6 +304,72 @@ To add a new skill and pick it up without restarting:
 ```
 
 Skills are also exposed as MCP tools — see the MCP Server section below.
+
+### Secrets vault
+
+Skills often need API keys — for image generation, external services, and so on. The secrets vault lets you store these credentials safely and inject them into skills at runtime.
+
+#### How it works
+
+1. You store a secret with `/secret set`. The value is encrypted immediately and never stored in plaintext.
+2. When a skill runs, the bot checks which secrets are allowed for that skill, decrypts them, and injects them as environment variables (`ARTOO_SECRET_KEYNAME=value`).
+3. The skill script reads them from its environment. Claude never sees them — secrets go directly to shell scripts, not into the AI context.
+
+#### Skill locking — why `--skill` is required
+
+Every secret must be locked to a specific skill name. This is the core security guarantee: **a secret can only be injected into the one skill you explicitly trusted with it.**
+
+If you install a new skill later — even from an untrusted source — it cannot read your `GEMINI_API_KEY` or any other secret. It only gets the secrets that were locked to its own name.
+
+```
+/secret set GEMINI_API_KEY AIza... --skill imagine
+→ imagine gets GEMINI_API_KEY ✓
+→ any other skill gets nothing ✗
+```
+
+Without this, any skill script could read every secret you'd ever stored — making it trivial to write a skill that exfiltrates your credentials. Requiring an explicit lock makes the access declaration visible and auditable.
+
+#### Secret scoping
+
+Secrets are scoped to your current project by default, or globally across all projects with `--global`.
+
+| Command | Where it's available |
+|---|---|
+| `/secret set KEY val --skill foo` | Current project only |
+| `/secret set --global KEY val --skill foo` | All your projects |
+
+When a skill runs, it receives secrets from both scopes merged together. If the same key exists in both, the project-level value wins (useful for overriding a global default in one specific project).
+
+```
+Global scope (*):    GEMINI_KEY = xxxxxxx   ← available everywhere
+Project "research":  GEMINI_KEY = yyyyyyy   ← overrides global in this project
+Project "finance":   (none)                 ← uses global GEMINI_KEY
+```
+
+#### Encryption
+
+Secret values are encrypted with **AES-256-GCM** before being written to the database:
+
+- A 32-byte master key is generated once and stored at `~/.config/bot/<instance>/secrets.key` with permissions 0600 (readable only by you).
+- Each secret gets its own random 12-byte nonce — even two identical values produce different ciphertext.
+- The authentication tag means any tampering with the stored data is detected on decrypt.
+- What's in the SQLite database: `hex(nonce || ciphertext || auth_tag)`. The key is never in the database. Stealing the `.db` file alone gives you nothing.
+
+If you want to back up your secrets, back up both the database (`~/.config/bot/<instance>/memory/bot.db`) and the key file (`~/.config/bot/<instance>/secrets.key`). Keep them separate — together they unlock everything, apart they're useless.
+
+#### Example: set up and use the `/imagine` skill
+
+```
+/secret set GEMINI_API_KEY AIzaSy... --skill imagine
+→ Secret GEMINI_API_KEY saved for project global, skill: imagine ✓
+
+/imagine a tiny robot sitting on a cloud at sunset
+→ [image sent as photo]
+```
+
+The `imagine` skill is installed automatically by `install.sh`. It calls the Gemini Imagen API, saves the result as a PNG to your working directory, and the bot sends it back as a Telegram photo.
+
+---
 
 ### User approval
 
@@ -471,9 +544,11 @@ Each skill becomes a tool with the skill's name and description. Claude can call
 ```
 Telegram ──→ Bot (Go) ←── HTTP API  (Bearer token auth)
                 │               └── MCP server  (/mcp/sse, /mcp/message)
-                ├── SQLite  (memories, projects, schedules, users, api keys)
+                ├── SQLite  (memories, projects, schedules, users, api keys, secrets)
+                ├── secrets.key  (~/.config/bot/<instance>/secrets.key, mode 0600)
                 ├── Cron runner  (schedules, one-off reminders)
                 ├── Skills  (~/.config/bot/skills/, per-instance, per-project)
+                │       └── env: ARTOO_SECRET_* (decrypted, skill-locked) + ARTOO_WD
                 └── exec.Command  ──→  agentic CLI  (claude, opencode, ...)
                                             └── runs on your machine
                                                 with full filesystem access
@@ -494,8 +569,9 @@ Everything else — web search, file manipulation, code execution, PDF generatio
 
 - [x] Custom skills — drop scripts or prompts into `skills/` to create `/commands`
 - [x] MCP server — skills exposed as tools for Claude mid-task
+- [x] Secrets vault — encrypted credentials scoped per-project and locked to specific skills
+- [x] Image generation — `/imagine` demo skill via Gemini Imagen
 - [ ] Voice message support
-- [ ] Image generation commands
 - [ ] Multi-modal file handling (images, audio)
 
 ---

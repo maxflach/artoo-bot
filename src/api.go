@@ -336,7 +336,7 @@ func (b *Bot) handleMCPMessage(w http.ResponseWriter, r *http.Request) {
 			return b.runClaude(adminID, prompt, "global", wd, b.cfg.Backend.DefaultModel, nil)
 		}
 
-		result, err := b.dispatchSkill(skill, args.Input, runFn)
+		result, err := b.dispatchSkill(skill, args.Input, nil, runFn)
 		if err != nil {
 			response = mcpErrorResponse(req.ID, -32603, err.Error())
 			break

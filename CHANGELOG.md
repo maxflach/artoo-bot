@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.11.4 — 2026-02-22
+
+### Changed
+- **README commands table** — updated to reflect button-based interactions; `/project` now documented as a tap-to-switch menu, `/project update` as a button menu, `/skills` as runnable buttons; added `/wish` and `/wishes`; removed stale `/project list` row
+- **README Projects section** — documents the 3-step project creation flow (research type → auto PDF → agent style) and changing style via `/project update`
+
+---
+
+## v0.11.3 — 2026-02-22
+
+### Changed
+- **README comparison table** — new Secrets row: AES-256-GCM encrypted, locked per skill, Claude never sees values
+- **README security paragraph** — explains per-skill credential locking, shell-only injection, and auditable access declarations
+
+---
+
+## v0.11.2 — 2026-02-22
+
+### Changed
+- **README "Why I Built This"** — restored full design rationale: multi-user isolation, project context reducing hallucinations, persistence, async scheduling; clarified that the same model runs across all projects — only the injected context changes
+
+---
+
 ## v0.11.1 — 2026-02-22
 
 ### Changed

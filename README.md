@@ -1,6 +1,6 @@
 # Artoo Bot
 
-A personal Telegram bot that gives you remote access to an agentic CLI running on your own machine. Send a message, get things done — research, file work, scheduled tasks, and more.
+A personal bot that gives you remote access to an agentic CLI running on your own machine. Send a message, get things done — research, file work, scheduled tasks, and more. Supports Telegram, Discord, and a browser-based web chat UI.
 
 ---
 
@@ -26,6 +26,8 @@ A few other things that mattered to me:
 v0.3 added a skills system and a local MCP server — drop a script or markdown file into a `skills/` folder to create new `/commands`, no code changes needed. Skills are also exposed as MCP tools Claude can call mid-task.
 
 v0.4 adds a secrets vault. Skills can now declare which credentials they need, store them encrypted, and receive them as environment variables at runtime — without ever exposing values to Claude or other skills.
+
+v0.6 adds multi-transport support. The bot is no longer Telegram-only — you can run Discord and a browser-based web chat UI alongside Telegram, all sharing the same sessions, memory, and schedules.
 
 ---
 
@@ -70,15 +72,22 @@ claude  # follow login prompts
 
 Any CLI that accepts a prompt and returns text output can work — configure it under `backend` in the setup wizard.
 
-### 3. A Telegram Bot
+### 3. A messaging transport (at least one)
 
-1. Open Telegram and message [@BotFather](https://t.me/botfather)
-2. Send `/newbot`
-3. Follow the prompts — choose a name and a `@username` (must end in `_bot`)
-4. BotFather gives you a token like `1234567890:ABCdef...` — save it
+**Telegram** (most common):
+1. Message [@BotFather](https://t.me/botfather) → `/newbot`
+2. Copy the token (`1234567890:ABCdef...`)
+3. Find your user ID via [@userinfobot](https://t.me/userinfobot)
 
-**Find your Telegram user ID:**
-Message [@userinfobot](https://t.me/userinfobot) — it replies with your numeric user ID.
+**Discord** (optional):
+1. Create a bot at [discord.com/developers](https://discord.com/developers/applications)
+2. Enable *Message Content Intent* under Bot → Privileged Gateway Intents
+3. Copy the bot token; invite the bot to your server with `bot` scope and `Send Messages` permission
+4. Add `discord.token` and your Discord user ID (snowflake) to config
+
+**Web chat** (optional):
+- Set `webchat.enabled: true` in config and make sure `api.port` is non-zero
+- Access at `http://localhost:<port>/chat?key=<apikey>` — works great over Tailscale
 
 ---
 
@@ -397,6 +406,17 @@ telegram:
     - 123456789
   admin_user_id: 123456789
 
+# Optional: Discord transport
+# discord:
+#   token: "YOUR_DISCORD_BOT_TOKEN"
+#   allowed_user_ids:
+#     - 987654321098765432   # Discord user snowflake IDs
+#   admin_user_id: 987654321098765432
+
+# Optional: browser-based web chat (requires api.port to be set)
+# webchat:
+#   enabled: true
+
 backend:
   type: "claude-code"        # or "opencode"
   binary: "/path/to/claude"
@@ -415,7 +435,7 @@ memory:
   max_age_days: 90
 
 api:
-  port: 8088  # set to 0 to disable
+  port: 8088  # set to 0 to disable; required for web chat
 ```
 
 ---
@@ -551,20 +571,22 @@ Each skill becomes a tool with the skill's name and description. Claude can call
 ## Architecture
 
 ```
-Telegram ──→ Bot (Go) ←── HTTP API  (Bearer token auth)
-                │               └── MCP server  (/mcp/sse, /mcp/message)
-                ├── SQLite  (memories, projects, schedules, users, api keys, secrets)
-                ├── secrets.key  (~/.config/bot/<instance>/secrets.key, mode 0600)
-                ├── Cron runner  (schedules, one-off reminders)
-                ├── Skills  (~/.config/bot/skills/, per-instance, per-project)
-                │       └── env: ARTOO_SECRET_* (decrypted, skill-locked) + ARTOO_WD
-                └── exec.Command  ──→  agentic CLI  (claude, opencode, ...)
-                                            └── runs on your machine
-                                                with full filesystem access
+Telegram ─┐
+Discord  ─┤─→ Bot (Go) ←── HTTP API  (Bearer token auth)
+Web chat ─┘        │           ├── /chat, /chat/sse  (web chat UI)
+                   │           └── MCP server  (/mcp/sse, /mcp/message)
+                   ├── SQLite  (memories, projects, schedules, users, api keys, secrets)
+                   ├── secrets.key  (~/.config/bot/<instance>/secrets.key, mode 0600)
+                   ├── Cron runner  (schedules, one-off reminders)
+                   ├── Skills  (~/.config/bot/skills/, per-instance, per-project)
+                   │       └── env: ARTOO_SECRET_* (decrypted, skill-locked) + ARTOO_WD
+                   └── exec.Command  ──→  agentic CLI  (claude, opencode, ...)
+                                               └── runs on your machine
+                                                   with full filesystem access
 ```
 
 The Go process is intentionally thin. It handles:
-- Telegram polling and message routing
+- Message routing across all configured transports
 - Per-user session and project state
 - Memory extraction (background, uses a cheaper model)
 - Cron scheduling
@@ -580,6 +602,7 @@ Everything else — web search, file manipulation, code execution, PDF generatio
 - [x] MCP server — skills exposed as tools for Claude mid-task
 - [x] Secrets vault — encrypted credentials scoped per-project and locked to specific skills
 - [x] Image generation — `/imagine` demo skill via Gemini Imagen
+- [x] Multi-transport — Telegram, Discord, web chat
 - [ ] Voice message support
 - [ ] Multi-modal file handling (images, audio)
 

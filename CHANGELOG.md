@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.6 — 2026-02-22
+
+### Added
+- **Multi-transport architecture** — the bot is no longer Telegram-only; a `Transport` interface decouples all messaging backends from core logic
+- **Discord transport** — connect via a Discord bot token; configure `discord.token` and `discord.allowed_user_ids` in config; DM and guild messages supported
+- **Web chat transport** — browser-based chat UI served at `/chat` (requires API port enabled); SSE event stream at `/chat/sse`; dark-mode UI with keyboard shortcut to send; auth via existing API key mechanism
+- **`RichTransport` extension** — optional interface for transports that support interactive buttons; Telegram implements it (inline keyboards for schedule remove); other transports fall back to plain-text with `/unschedule <id>` hint
+- **Multi-admin support** — `isAdmin()` checks all configured transport admin IDs; Discord admin can manage API keys and secrets just like the Telegram admin
+
+### Changed
+- `Session.chatID` changed from `int64` to `string` — transport-prefixed format (`tg:123`, `dc:456`, `wc:abc`)
+- `Schedule.ChatID` likewise changed to `string`; DB migration adds `chat_id_str` column and back-fills existing rows as `tg:<old_id>` on startup (backward compatible)
+- All Telegram-specific code extracted from `main.go` into `telegram.go`
+- `bot.reply()` and `bot.sendFile()` now route via transport prefix instead of calling the Telegram API directly
+- `bot.run()` starts all configured transports concurrently
+
+### New files
+- `src/transport.go` — `Transport` / `RichTransport` interfaces, `IncomingMessage`, `Button`, `makeChatID` / `splitChatID`
+- `src/telegram.go` — `TelegramTransport` (extracted from `main.go`)
+- `src/discord.go` — `DiscordTransport` via `github.com/bwmarrin/discordgo`
+- `src/webchat.go` — `WebChatTransport` (SSE + HTTP POST)
+
+---
+
 ## v0.5 — 2026-02-22
 
 ### Added

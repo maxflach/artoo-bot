@@ -10,6 +10,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+type AllowedPath struct {
+	Path  string `yaml:"path"`
+	Alias string `yaml:"alias"` // defaults to filepath.Base(Path) if empty
+}
+
 type Config struct {
 	Telegram struct {
 		Token          string  `yaml:"token"`
@@ -41,6 +46,7 @@ type Config struct {
 	API struct {
 		Port int `yaml:"port"` // 0 = disabled
 	} `yaml:"api"`
+	AllowedPaths map[string][]AllowedPath `yaml:"allowed_paths"`
 }
 
 // instance is the bot's name (e.g. "rex", "sara") set via --instance flag
@@ -83,6 +89,13 @@ func loadConfig() (*Config, error) {
 	}
 	if cfg.Backend.ExtractModel == "" {
 		cfg.Backend.ExtractModel = cfg.Backend.DefaultModel
+	}
+	for username, paths := range cfg.AllowedPaths {
+		for i := range paths {
+			if cfg.AllowedPaths[username][i].Alias == "" {
+				cfg.AllowedPaths[username][i].Alias = filepath.Base(paths[i].Path)
+			}
+		}
 	}
 	return &cfg, nil
 }

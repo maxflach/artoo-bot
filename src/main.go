@@ -103,6 +103,7 @@ type Bot struct {
 	secretKey          []byte
 	pendingProjectsMu  sync.RWMutex
 	pendingProjects    map[string]*PendingProject
+	allowedPaths       map[int64][]AllowedPath
 }
 
 func newBot(cfg *Config) (*Bot, error) {
@@ -137,6 +138,16 @@ func newBot(cfg *Config) (*Bot, error) {
 		return nil, fmt.Errorf("secret key: %w", err)
 	}
 
+	allowedPaths := make(map[int64][]AllowedPath)
+	for username, paths := range cfg.AllowedPaths {
+		uid := mem.userIDForUsername(username)
+		if uid == 0 {
+			log.Printf("allowed_paths: username %q not found in approved_users — skipping", username)
+			continue
+		}
+		allowedPaths[uid] = paths
+	}
+
 	b := &Bot{
 		cfg:             cfg,
 		transports:      make(map[string]Transport),
@@ -145,6 +156,7 @@ func newBot(cfg *Config) (*Bot, error) {
 		sessions:        sessions,
 		secretKey:       secretKey,
 		pendingProjects: make(map[string]*PendingProject),
+		allowedPaths:    allowedPaths,
 	}
 	b.cron = newCronRunner(b)
 	b.skills = loadSkills(skillPaths(""))
@@ -223,6 +235,21 @@ func (b *Bot) isAdmin(userID int64) bool {
 		return true
 	}
 	return false
+}
+
+// allowedPathsFor returns the list of allowed external paths for a user.
+func (b *Bot) allowedPathsFor(userID int64) []AllowedPath {
+	return b.allowedPaths[userID]
+}
+
+// matchAllowedPath returns the AllowedPath matching a name/alias/path, if any.
+func (b *Bot) matchAllowedPath(userID int64, name string) (AllowedPath, bool) {
+	for _, ap := range b.allowedPathsFor(userID) {
+		if name == ap.Path || name == ap.Alias || name == "~/"+ap.Alias {
+			return ap, true
+		}
+	}
+	return AllowedPath{}, false
 }
 
 // chatIDForUser returns the active chatID for a userID, falling back to Telegram DM.
@@ -527,10 +554,16 @@ func (b *Bot) handleProjectList(chatID string, sess *Session) {
 
 	sess.mu.Lock()
 	activeWS := sess.workspace
+	activeWD := sess.workingDir
 	sess.mu.Unlock()
 
-	type proj struct{ name, title string }
-	projects := []proj{{"global", "Global (default)"}}
+	type proj struct {
+		name  string
+		title string
+		dir   string
+		data  string // button callback data
+	}
+	projects := []proj{{"global", "Global (default)", baseWD, "projswitch:global"}}
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -546,17 +579,40 @@ func (b *Bot) handleProjectList(chatID string, sess *Session) {
 				}
 			}
 		}
-		projects = append(projects, proj{name, title})
+		projects = append(projects, proj{name, title, dir, "projswitch:" + name})
+	}
+
+	for _, ap := range b.allowedPathsFor(sess.userID) {
+		title := "[ext] " + ap.Alias
+		if readme := readWorkspaceReadme(ap.Path); readme != "" {
+			for _, line := range strings.Split(readme, "\n") {
+				if strings.HasPrefix(line, "# ") {
+					title = "[ext] " + strings.TrimPrefix(line, "# ")
+					break
+				}
+			}
+		}
+		projects = append(projects, proj{"ext:" + ap.Alias, title, ap.Path, "projpath:" + ap.Path})
+	}
+
+	isActive := func(p proj) bool {
+		if p.name == activeWS {
+			return true
+		}
+		if strings.HasPrefix(p.name, "ext:") && p.dir == activeWD {
+			return true
+		}
+		return false
 	}
 
 	if rt, localChatID, ok := b.richTransport(chatID); ok {
 		buttons := make([]Button, len(projects))
 		for i, p := range projects {
 			label := p.title
-			if p.name == activeWS {
+			if isActive(p) {
 				label = "✓ " + label
 			}
-			buttons[i] = Button{Label: label, Data: "projswitch:" + p.name}
+			buttons[i] = Button{Label: label, Data: p.data}
 		}
 		rt.SendButtonMenu(localChatID,
 			"*Switch project*\nEach project has its own memory, files, and context — switching changes what I know and where I work.",
@@ -568,7 +624,7 @@ func (b *Bot) handleProjectList(chatID string, sess *Session) {
 	var lines []string
 	for _, p := range projects {
 		marker := ""
-		if p.name == activeWS {
+		if isActive(p) {
 			marker = " ◀ active"
 		}
 		lines = append(lines, fmt.Sprintf("• *%s*%s", p.name, marker))
@@ -585,12 +641,32 @@ func (b *Bot) handleWorkspace(chatID string, sess *Session, args string) {
 		description = strings.TrimSpace(parts[1])
 	}
 
-	sess.mu.Lock()
-	baseWD := sess.workingDir
-	if sess.workspace != "global" {
-		baseWD = filepath.Dir(sess.workingDir)
+	// External path branch — check before any other logic.
+	if ap, ok := b.matchAllowedPath(sess.userID, name); ok {
+		if _, err := os.Stat(ap.Path); err != nil {
+			b.reply(chatID, fmt.Sprintf("External directory not accessible: %v", err))
+			return
+		}
+		sess.mu.Lock()
+		sess.workspace = ap.Alias
+		sess.workingDir = ap.Path
+		sess.model = ""
+		sess.history = nil
+		sess.mu.Unlock()
+		b.mem.saveUserState(sess.userID, ap.Alias, ap.Path)
+		b.reply(chatID, fmt.Sprintf("Switched to *%s* (external) ✓", ap.Alias))
+		return
 	}
-	sess.mu.Unlock()
+
+	// Reject bare absolute paths not in the allowed list.
+	if filepath.IsAbs(name) {
+		b.reply(chatID, "That path is not in your allowed directories.")
+		return
+	}
+
+	// Always derive base from the user's canonical workspace root, regardless
+	// of whether they are currently in an external path.
+	baseWD := userWorkingDir(b.cfg.Backend.WorkingDir, sess.userID)
 
 	wsDir := projectDir(baseWD, name)
 	isNew := false
@@ -1272,12 +1348,27 @@ func (b *Bot) buildAICommand(prompt, model, systemPrompt string) *exec.Cmd {
 
 // displayPath replaces the user base dir prefix with ~ for user-visible output.
 func displayPath(path, userBaseDir string) string {
+	return displayPathEx(path, userBaseDir, nil)
+}
+
+// displayPathEx replaces the user base dir prefix with ~, and also maps allowed
+// external paths to their ~/alias/... shorthand.
+func displayPathEx(path, userBaseDir string, allowed []AllowedPath) string {
 	if strings.HasPrefix(path, userBaseDir) {
 		rel := strings.TrimPrefix(path, userBaseDir)
 		if rel == "" {
 			return "~"
 		}
 		return "~" + rel
+	}
+	for _, ap := range allowed {
+		if path == ap.Path || strings.HasPrefix(path, ap.Path+"/") {
+			rel := strings.TrimPrefix(path, ap.Path)
+			if rel == "" {
+				return "~/" + ap.Alias
+			}
+			return "~/" + ap.Alias + rel
+		}
 	}
 	return path
 }
@@ -1286,18 +1377,30 @@ func displayPath(path, userBaseDir string) string {
 func (b *Bot) runClaude(userID int64, prompt, workspace, workingDir, model string, history []Message) (string, error) {
 	home, _ := os.UserHomeDir()
 	botHome := userWorkingDir(b.cfg.Backend.WorkingDir, userID)
-	displayWD := displayPath(workingDir, botHome)
+	allowedForUser := b.allowedPathsFor(userID)
+	displayWD := displayPathEx(workingDir, botHome, allowedForUser)
 	systemPrompt := b.cfg.Persona.SystemPrompt
 	systemPrompt += fmt.Sprintf(
 		"\n\n## Working Directory\n"+
 			"Your working directory alias is: %s\n"+
 			"(~ = %s)\n"+
 			"STRICT RULES:\n"+
-			"- You MUST stay inside this directory at all times\n"+
-			"- Never read, write, or reference files outside this directory\n"+
+			"- You MUST stay inside your working directory (or any allowed external directories listed below)\n"+
+			"- Never read, write, or reference files outside this directory or the listed allowed paths\n"+
 			"- All outputs (files, PDFs, data) go here and nowhere else\n"+
 			"- When mentioning paths in responses, always use ~/... shorthand, never the full path",
 		displayWD, workingDir)
+	if len(allowedForUser) > 0 {
+		var extLines []string
+		for _, ap := range allowedForUser {
+			extLines = append(extLines, fmt.Sprintf("- ~/%s  (= %s)", ap.Alias, ap.Path))
+		}
+		systemPrompt += "\n\n## Allowed External Directories\n" +
+			"You may also read and write files in these additional directories:\n" +
+			strings.Join(extLines, "\n") + "\n" +
+			"When mentioning files in these directories, use ~/alias/... shorthand.\n" +
+			"Do NOT access any other directories outside your workspace or these listed paths."
+	}
 
 	systemPrompt += "\n\n## Report Generation\n" +
 		"When creating a report, digest, or summary for the user, write it as a markdown\n" +

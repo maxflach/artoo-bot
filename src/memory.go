@@ -745,6 +745,12 @@ func (m *MemoryStore) usernameFor(userID int64) string {
 	return u
 }
 
+func (m *MemoryStore) userIDForUsername(username string) int64 {
+	var uid int64
+	m.db.QueryRow("SELECT user_id FROM approved_users WHERE username = ?", username).Scan(&uid)
+	return uid
+}
+
 func (m *MemoryStore) addWish(userID int64, username, message string) error {
 	_, err := m.db.Exec(
 		"INSERT INTO wishes (user_id, username, message) VALUES (?, ?, ?)",

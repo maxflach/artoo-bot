@@ -249,6 +249,14 @@ func (t *TelegramTransport) handleCallback(cb *tgbotapi.CallbackQuery) {
 		t.handleProjSwitchCallback(cb, strings.TrimPrefix(data, "projswitch:"))
 		return
 	}
+	if strings.HasPrefix(data, "projpath:") {
+		absPath := strings.TrimPrefix(data, "projpath:")
+		if sess := b.getSession(cb.From.ID); sess != nil {
+			t.clearButtons(cb)
+			b.handleWorkspace(tgChatID(cb.From.ID), sess, absPath)
+		}
+		return
+	}
 	if strings.HasPrefix(data, "projupdate:") {
 		t.handleProjUpdateCallback(cb, strings.TrimPrefix(data, "projupdate:"))
 		return

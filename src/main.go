@@ -418,6 +418,46 @@ func (b *Bot) handleCommand(chatID string, sess *Session, text string) {
 	case "secret":
 		b.handleSecretCommand(chatID, sess, args)
 
+	case "wish":
+		if args == "" {
+			b.reply(chatID, "Usage: `/wish <your message>`")
+			return
+		}
+		username := b.mem.usernameFor(sess.userID)
+		if err := b.mem.addWish(sess.userID, username, args); err != nil {
+			b.reply(chatID, fmt.Sprintf("Failed to save wish: %v", err))
+			return
+		}
+		b.reply(chatID, "Wish submitted ✓ I'll pass it along.")
+
+	case "wishes":
+		if !b.isAdmin(sess.userID) {
+			b.reply(chatID, "Admin only.")
+			return
+		}
+		if strings.HasPrefix(args, "done ") {
+			var id int64
+			fmt.Sscanf(strings.TrimPrefix(args, "done "), "%d", &id)
+			b.mem.markWishDone(id)
+			b.reply(chatID, fmt.Sprintf("Wish #%d marked done ✓", id))
+			return
+		}
+		wishes, err := b.mem.listWishes()
+		if err != nil || len(wishes) == 0 {
+			b.reply(chatID, "No wishes yet.")
+			return
+		}
+		var sb strings.Builder
+		sb.WriteString("*Wishlist*\n\n")
+		for _, w := range wishes {
+			status := "•"
+			if w.Done {
+				status = "✓"
+			}
+			sb.WriteString(fmt.Sprintf("%s *#%d* @%s\n_%s_\n\n", status, w.ID, w.Username, w.Message))
+		}
+		b.reply(chatID, strings.TrimSpace(sb.String()))
+
 	default:
 		b.skillsMu.RLock()
 		skill, isSkill := b.skills[cmd]
@@ -1094,19 +1134,34 @@ func (b *Bot) buildAICommand(prompt, model, systemPrompt string) *exec.Cmd {
 	}
 }
 
+// displayPath replaces the user base dir prefix with ~ for user-visible output.
+func displayPath(path, userBaseDir string) string {
+	if strings.HasPrefix(path, userBaseDir) {
+		rel := strings.TrimPrefix(path, userBaseDir)
+		if rel == "" {
+			return "~"
+		}
+		return "~" + rel
+	}
+	return path
+}
+
 // runClaude executes the Claude CLI with all context provided explicitly (no session access).
 func (b *Bot) runClaude(userID int64, prompt, workspace, workingDir, model string, history []Message) (string, error) {
 	home, _ := os.UserHomeDir()
+	botHome := userWorkingDir(b.cfg.Backend.WorkingDir, userID)
+	displayWD := displayPath(workingDir, botHome)
 	systemPrompt := b.cfg.Persona.SystemPrompt
 	systemPrompt += fmt.Sprintf(
 		"\n\n## Working Directory\n"+
-			"Your working directory is: %s\n"+
+			"Your working directory alias is: %s\n"+
+			"(~ = %s)\n"+
 			"STRICT RULES:\n"+
 			"- You MUST stay inside this directory at all times\n"+
 			"- Never read, write, or reference files outside this directory\n"+
 			"- All outputs (files, PDFs, data) go here and nowhere else\n"+
-			"- Never mention file paths in your responses",
-		workingDir)
+			"- When mentioning paths in responses, always use ~/... shorthand, never the full path",
+		displayWD, workingDir)
 
 	systemPrompt += "\n\n## Report Generation\n" +
 		"When creating a report, digest, or summary for the user, write it as a markdown\n" +
@@ -1119,11 +1174,13 @@ func (b *Bot) runClaude(userID int64, prompt, workspace, workingDir, model strin
 		"any PDF tools directly."
 
 	if readme := readWorkspaceReadme(workingDir); readme != "" {
-		systemPrompt += "\n\n## Workspace Configuration (README.md)\n\n" + readme
+		readmeContent := strings.ReplaceAll(readme, "~", home)
+		systemPrompt += "\n\n## Workspace Configuration (README.md)\n\n" + readmeContent
 	}
 
 	if mem := b.mem.load(userID, workspace, b.cfg.Memory.MaxAgeDays); mem != "" {
-		systemPrompt += "\n\n" + mem
+		memoriesContent := strings.ReplaceAll(mem, "~", home)
+		systemPrompt += "\n\n" + memoriesContent
 	}
 
 	b.skillsMu.RLock()
@@ -1147,8 +1204,6 @@ func (b *Bot) runClaude(userID int64, prompt, workspace, workingDir, model strin
 			systemPrompt += fmt.Sprintf("%s: %s\n", m.Role, m.Content)
 		}
 	}
-
-	systemPrompt = strings.ReplaceAll(systemPrompt, "~", home)
 
 	cmd := b.buildAICommand(prompt, model, systemPrompt)
 	cmd.Dir = workingDir
@@ -1585,6 +1640,10 @@ func (b *Bot) helpText() string {
 			"/secret set --global <name> <value> --skill <skill> — store for all projects\n"+
 			"/secret list — show stored secret names\n"+
 			"/secret del <name> — remove a secret\n\n"+
+			"*Wishlist*\n"+
+			"/wish <message> — submit a feature request\n"+
+			"/wishes — list all wishes (admin)\n"+
+			"/wishes done <id> — mark a wish as done (admin)\n\n"+
 			"*Legacy Skills*\n"+
 			"/skills reload — reload skills from disk (admin)\n\n"+
 			"*Examples*\n"+

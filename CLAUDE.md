@@ -74,3 +74,7 @@ The HTTP API is documented in `src/openapi.yaml` (embedded into the binary at bu
 **Rule: If you modify API endpoints in `api.go`, update `src/openapi.yaml` to match.**
 
 The spec is served at `/openapi.yaml` and browsable via Swagger UI at `/docs`.
+
+## Notes
+
+- Do not use `push-status` in this project. It is a personal Claude Code skill for long coding sessions and is not relevant here.

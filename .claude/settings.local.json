@@ -5,7 +5,13 @@
       "Bash(git:*)",
       "Bash(cd /Users/max/code/bot/src && go build -o ../bot . 2>&1)",
       "Bash(go build:*)",
-      "Bash(ls /Users/max/code/bot/src/*.go && go build -o ../bot . 2>&1)"
+      "Bash(ls /Users/max/code/bot/src/*.go && go build -o ../bot . 2>&1)",
+      "Bash(cd /Users/max/code/bot/src && go get github.com/bwmarrin/discordgo@latest 2>&1)",
+      "Bash(ls -la /Users/max/code/bot/bot && /Users/max/code/bot/bot --help 2>&1)",
+      "Bash(go vet:*)",
+      "Bash(launchctl list:*)",
+      "Bash(curl:*)",
+      "Bash(sqlite3:*)"
     ]
   }
 }

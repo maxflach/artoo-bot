@@ -116,6 +116,7 @@ func newMemoryStore() (*MemoryStore, error) {
 	ms.initUserStateTable()
 	ms.initAPIKeysTable()
 	ms.initSecretsTable()
+	ms.initWishesTable()
 	return ms, nil
 }
 
@@ -714,4 +715,66 @@ func (m *MemoryStore) deleteSecret(userID int64, scope, name string) error {
 		return fmt.Errorf("secret %q not found in scope %q", name, scope)
 	}
 	return nil
+}
+
+// --- Wishes ---
+
+type Wish struct {
+	ID        int64
+	UserID    int64
+	Username  string
+	Message   string
+	Done      bool
+	CreatedAt time.Time
+}
+
+func (m *MemoryStore) initWishesTable() {
+	m.db.Exec(`CREATE TABLE IF NOT EXISTS wishes (
+		id          INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id     INTEGER NOT NULL,
+		username    TEXT NOT NULL DEFAULT '',
+		message     TEXT NOT NULL,
+		done        INTEGER NOT NULL DEFAULT 0,
+		created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+	)`)
+}
+
+func (m *MemoryStore) usernameFor(userID int64) string {
+	var u string
+	m.db.QueryRow("SELECT username FROM approved_users WHERE user_id = ?", userID).Scan(&u)
+	return u
+}
+
+func (m *MemoryStore) addWish(userID int64, username, message string) error {
+	_, err := m.db.Exec(
+		"INSERT INTO wishes (user_id, username, message) VALUES (?, ?, ?)",
+		userID, username, message,
+	)
+	return err
+}
+
+func (m *MemoryStore) listWishes() ([]Wish, error) {
+	rows, err := m.db.Query(
+		"SELECT id, user_id, username, message, done, created_at FROM wishes ORDER BY id",
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var wishes []Wish
+	for rows.Next() {
+		var w Wish
+		var done int
+		if err := rows.Scan(&w.ID, &w.UserID, &w.Username, &w.Message, &done, &w.CreatedAt); err != nil {
+			continue
+		}
+		w.Done = done == 1
+		wishes = append(wishes, w)
+	}
+	return wishes, rows.Err()
+}
+
+func (m *MemoryStore) markWishDone(id int64) error {
+	_, err := m.db.Exec("UPDATE wishes SET done = 1 WHERE id = ?", id)
+	return err
 }

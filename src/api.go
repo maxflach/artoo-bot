@@ -177,7 +177,7 @@ func (b *Bot) apiRun(w http.ResponseWriter, r *http.Request) {
 	model := b.activeModelForSession(sess)
 	if body.Workspace != "" {
 		ws = body.Workspace
-		wd = projectDir(wd, body.Workspace)
+		wd = projectDir(userWorkingDir(b.cfg.Backend.WorkingDir, userID), body.Workspace)
 	}
 	sess.mu.Unlock()
 

@@ -7,6 +7,9 @@ config.yaml
 *.yaml
 *.yml
 
+# Exceptions
+!src/openapi.yaml
+
 # Logs
 *.log
 *.err

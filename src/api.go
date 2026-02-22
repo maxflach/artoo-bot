@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -14,6 +15,32 @@ import (
 	"sync"
 	"time"
 )
+
+//go:embed openapi.yaml
+var openapiSpec []byte
+
+const swaggerUIHTML = `<!DOCTYPE html>
+<html>
+<head>
+  <title>%s API</title>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" type="text/css" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
+</head>
+<body>
+<div id="swagger-ui"></div>
+<script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+<script>
+  SwaggerUIBundle({
+    url: "/openapi.yaml",
+    dom_id: '#swagger-ui',
+    presets: [SwaggerUIBundle.presets.apis, SwaggerUIBundle.SwaggerUIStandalonePreset],
+    layout: "BaseLayout"
+  });
+</script>
+</body>
+</html>
+`
 
 // mcpConns holds active SSE connections, keyed by connection ID.
 var mcpConns sync.Map // string → chan []byte
@@ -31,6 +58,14 @@ func (b *Bot) startAPIServer() {
 	mux.HandleFunc("/v1/run", b.requireAPIKey(b.apiRun))
 	mux.HandleFunc("/mcp/sse", b.requireAPIKey(b.handleMCPSSE))
 	mux.HandleFunc("/mcp/message", b.requireAPIKey(b.handleMCPMessage))
+	mux.HandleFunc("/openapi.yaml", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yaml")
+		w.Write(openapiSpec)
+	})
+	mux.HandleFunc("/docs", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprintf(w, swaggerUIHTML, b.cfg.Persona.Name)
+	})
 
 	addr := fmt.Sprintf(":%d", port)
 	log.Printf("api: listening on %s", addr)

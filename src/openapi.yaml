@@ -1,0 +1,297 @@
+openapi: "3.0.3"
+info:
+  title: Artoo Bot API
+  version: "0.2"
+  description: |
+    REST API for Artoo, a Telegram-based personal assistant.
+    All endpoints except `/v1/health`, `/openapi.yaml`, and `/docs` require Bearer token authentication.
+    The `/mcp/sse` and `/mcp/message` endpoints implement the Model Context Protocol (MCP) over Server-Sent Events.
+
+servers:
+  - url: http://localhost:8088
+    description: Local instance (default port)
+
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: API key generated via the bot's `/apikey` command.
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "invalid API key"
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "ok"
+        bot:
+          type: string
+          example: "Artoo"
+
+    SendRequest:
+      type: object
+      required:
+        - text
+      properties:
+        user_id:
+          type: integer
+          format: int64
+          description: Telegram user ID to send to. Defaults to the configured admin user.
+          example: 123456789
+        text:
+          type: string
+          description: Message text to send via Telegram.
+          example: "Hello from the API!"
+
+    SendResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+          example: true
+
+    RunRequest:
+      type: object
+      required:
+        - prompt
+      properties:
+        user_id:
+          type: integer
+          format: int64
+          description: Telegram user ID whose session to use. Defaults to admin user.
+          example: 123456789
+        prompt:
+          type: string
+          description: Prompt to run via the configured AI backend.
+          example: "Summarize my week"
+        workspace:
+          type: string
+          description: Workspace/project name to run the prompt in. Defaults to the user's current workspace.
+          example: "global"
+
+    RunResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "queued"
+
+paths:
+  /v1/health:
+    get:
+      summary: Health check
+      description: Returns the bot status. No authentication required.
+      security: []
+      operationId: getHealth
+      tags:
+        - System
+      responses:
+        "200":
+          description: Bot is running.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /v1/send:
+    post:
+      summary: Send a Telegram message
+      description: Sends a plain text message to a Telegram user via the bot.
+      operationId: sendMessage
+      tags:
+        - Messaging
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendRequest"
+      responses:
+        "200":
+          description: Message sent successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SendResponse"
+        "400":
+          description: Bad request (missing or invalid fields).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing or invalid API key.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "405":
+          description: Method not allowed (POST only).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/run:
+    post:
+      summary: Run a prompt via the AI backend
+      description: |
+        Runs a prompt through the configured AI backend (Claude Code or OpenCode) using the
+        specified user's session context. The response is sent to the user via Telegram.
+        Returns immediately with `status: queued`; execution happens asynchronously.
+      operationId: runPrompt
+      tags:
+        - Execution
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RunRequest"
+      responses:
+        "202":
+          description: Prompt accepted and queued for execution.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunResponse"
+        "400":
+          description: Bad request (missing or invalid fields).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing or invalid API key.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: User not found or not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "405":
+          description: Method not allowed (POST only).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /mcp/sse:
+    get:
+      summary: Open MCP SSE stream
+      description: |
+        Opens a Server-Sent Events stream implementing the Model Context Protocol (MCP).
+        On connect, sends an `endpoint` event containing the URL to POST JSON-RPC 2.0 messages to.
+        Sends keepalive comments every 15 seconds.
+        Use this endpoint to register Artoo as an MCP server in Claude Code (`~/.claude.json`).
+      operationId: mcpSSE
+      tags:
+        - MCP
+      responses:
+        "200":
+          description: SSE stream established.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: |
+                  Stream of SSE events. First event is `endpoint` with the message POST URL.
+                  Subsequent events are `message` with JSON-RPC 2.0 responses.
+              example: |
+                event: endpoint
+                data: http://localhost:8088/mcp/message?id=abc123
+
+                : keepalive
+        "401":
+          description: Missing or invalid API key.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /mcp/message:
+    post:
+      summary: Send MCP JSON-RPC 2.0 message
+      description: |
+        Receives a JSON-RPC 2.0 request and routes the response back over the associated SSE stream.
+        The `id` query parameter must match a connection ID returned by `/mcp/sse`.
+        Supported methods: `initialize`, `tools/list`, `tools/call`.
+        Notifications (requests without an `id` field) return 202 with no response body.
+      operationId: mcpMessage
+      tags:
+        - MCP
+      parameters:
+        - in: query
+          name: id
+          required: true
+          schema:
+            type: string
+          description: Connection ID from the `endpoint` event of an active `/mcp/sse` stream.
+          example: "abc123def456"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - jsonrpc
+                - method
+              properties:
+                jsonrpc:
+                  type: string
+                  enum: ["2.0"]
+                id:
+                  description: Request ID. Omit for notifications.
+                  oneOf:
+                    - type: string
+                    - type: integer
+                method:
+                  type: string
+                  enum: ["initialize", "tools/list", "tools/call"]
+                  example: "tools/list"
+                params:
+                  type: object
+                  description: Method-specific parameters.
+      responses:
+        "202":
+          description: Request accepted; response will be sent over the SSE stream.
+        "400":
+          description: Bad request (invalid JSON or missing `id` parameter).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing or invalid API key.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "405":
+          description: Method not allowed (POST only).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "410":
+          description: SSE connection expired or not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"

@@ -66,3 +66,11 @@ The app is a single Go binary with no subpackages. All source is in `src/`:
 - `github.com/google/uuid` — API key generation
 
 Go version: 1.25.7. No test files exist in the codebase.
+
+## API Documentation
+
+The HTTP API is documented in `src/openapi.yaml` (embedded into the binary at build time).
+
+**Rule: If you modify API endpoints in `api.go`, update `src/openapi.yaml` to match.**
+
+The spec is served at `/openapi.yaml` and browsable via Swagger UI at `/docs`.

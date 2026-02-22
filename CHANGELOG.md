@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.9 — 2026-02-22
+
+### Changed
+- **File-type-aware extraction** — `handleFileUpload` now builds a per-extension extraction hint telling Claude which tool to use: `pdftotext` for PDFs (falling back to `pandoc`), `pandoc` for DOCX/DOC, `python3`/`openpyxl` for Excel, and direct read for everything else
+- **Comprehensive markdown output** — extraction prompt explicitly requests all facts, numbers, dates, names, and tabular data to be preserved; Claude writes the `.md` file directly to disk
+- **Memory population on upload** — after the markdown is written, `extractAndSave` runs in the background via `ExtractModel` to populate the memories table with key facts from the document
+- **Cleaner upload reply** — bot now replies `*file.pdf* extracted to \`file.md\` ✓` instead of forwarding Claude's stdout
+
+---
+
 ## v0.8 — 2026-02-22
 
 ### Added

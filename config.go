@@ -76,15 +76,23 @@ func loadConfig() (*Config, error) {
 	return &cfg, nil
 }
 
-func runOnboarding() {
-	fmt.Printf("=== Bot Setup: %s ===\n\n", instance)
+// ANSI helpers
+const (
+	bold  = "\033[1m"
+	dim   = "\033[2m"
+	cyan  = "\033[36m"
+	green = "\033[32m"
+	reset = "\033[0m"
+)
 
+func runOnboarding() {
 	reader := bufio.NewReader(os.Stdin)
-	ask := func(prompt, def string) string {
+
+	ask := func(label, def string) string {
 		if def != "" {
-			fmt.Printf("%s [%s]: ", prompt, def)
+			fmt.Printf("  %s%s%s [%s%s%s]: ", bold, label, reset, dim, def, reset)
 		} else {
-			fmt.Printf("%s: ", prompt)
+			fmt.Printf("  %s%s%s: ", bold, label, reset)
 		}
 		val, _ := reader.ReadString('\n')
 		val = strings.TrimSpace(val)
@@ -94,28 +102,162 @@ func runOnboarding() {
 		return val
 	}
 
-	token := ask("Telegram bot token", "")
-	userID := ask("Your Telegram user ID", "")
-	claudeBin := ask("Claude binary path", "/Users/max/.local/bin/claude")
-	name := ask("Bot name/persona", strings.Title(instance))
-	maxAge := ask("Memory max age in days", "90")
+	choose := func(label string, options []string) string {
+		fmt.Printf("\n  %s%s%s\n", bold, label, reset)
+		for i, o := range options {
+			fmt.Printf("  %s[%d]%s %s\n", cyan, i+1, reset, o)
+		}
+		for {
+			fmt.Printf("  Choice [1]: ")
+			val, _ := reader.ReadString('\n')
+			val = strings.TrimSpace(val)
+			if val == "" {
+				return options[0]
+			}
+			for i := range options {
+				if val == fmt.Sprintf("%d", i+1) {
+					return options[i]
+				}
+			}
+			fmt.Println("  Invalid choice, try again.")
+		}
+	}
 
-	systemPrompt := fmt.Sprintf(
-		"You are %s — a sharp, reliable assistant running on coruscant.\n"+
-			"Be concise and natural. Never use the same greeting twice.\n"+
-			"You have full access to the filesystem and can run commands.\n"+
-			"When asked to do something, just do it. No disclaimers.", name)
+	confirm := func(label string) bool {
+		fmt.Printf("  %s [Y/n]: ", label)
+		val, _ := reader.ReadString('\n')
+		val = strings.ToLower(strings.TrimSpace(val))
+		return val == "" || val == "y" || val == "yes"
+	}
+
+	section := func(title string) {
+		fmt.Printf("\n%s── %s %s─────────────────────────%s\n\n", cyan, title, dim, reset)
+	}
+
+	// ── Header ──
+	fmt.Printf("\n%s%s", bold, cyan)
+	fmt.Println("  ╭─────────────────────────────────╮")
+	fmt.Println("  │         Bot Setup Wizard         │")
+	fmt.Printf("  ╰─────────────────────────────────╯%s\n", reset)
+
+	// ── Step 1: Backend ──
+	section("Step 1 · AI Backend")
+
+	backendChoice := choose("Which backend do you want to use?", []string{
+		"Claude Code  (claude CLI — best tool use)",
+		"OpenCode     (opencode CLI — open source)",
+	})
+	backendType := "claude-code"
+	if strings.HasPrefix(backendChoice, "OpenCode") {
+		backendType = "opencode"
+	}
+
+	defaultBinary := "/usr/local/bin/claude"
+	if backendType == "opencode" {
+		defaultBinary = "/usr/local/bin/opencode"
+	}
+	// Try to detect the binary in PATH
+	for _, candidate := range []string{
+		os.ExpandEnv("$HOME/.local/bin/claude"),
+		"/usr/local/bin/claude",
+		os.ExpandEnv("$HOME/.local/bin/opencode"),
+		"/usr/local/bin/opencode",
+	} {
+		if _, err := os.Stat(candidate); err == nil {
+			if (backendType == "claude-code" && strings.Contains(candidate, "claude")) ||
+				(backendType == "opencode" && strings.Contains(candidate, "opencode")) {
+				defaultBinary = candidate
+				break
+			}
+		}
+	}
+
+	fmt.Println()
+	binary := ask("Binary path", defaultBinary)
+
+	var defaultModel, defaultExtractModel string
+	switch backendType {
+	case "opencode":
+		defaultModel = "anthropic/claude-sonnet-4-6"
+		defaultExtractModel = "anthropic/claude-haiku-4-5"
+	default:
+		defaultModel = "claude-sonnet-4-6"
+		defaultExtractModel = "claude-haiku-4-5"
+	}
+	model := ask("Default model", defaultModel)
+	extractModel := ask("Extract model (memory, cheaper)", defaultExtractModel)
+
+	// ── Step 2: Telegram ──
+	section("Step 2 · Telegram")
+	fmt.Printf("  %sGet your token from @BotFather → /newbot%s\n\n", dim, reset)
+
+	token := ask("Bot token", "")
+	for token == "" {
+		fmt.Printf("  %sToken is required.%s\n", dim, reset)
+		token = ask("Bot token", "")
+	}
+
+	fmt.Printf("\n  %sYour Telegram user ID — message @userinfobot to find it%s\n\n", dim, reset)
+	userID := ask("Your Telegram user ID", "")
+	for userID == "" {
+		fmt.Printf("  %sUser ID is required.%s\n", dim, reset)
+		userID = ask("Your Telegram user ID", "")
+	}
+	adminID := ask("Admin user ID (approves new users)", userID)
+
+	// ── Step 3: Persona ──
+	section("Step 3 · Persona")
+
+	name := ask("Bot name", "Artoo")
+	hostname, _ := os.Hostname()
+	defaultPrompt := fmt.Sprintf(
+		"You are %s — a sharp, reliable personal assistant running on %s.\n"+
+			"    Be concise and natural. Never use the same greeting twice.\n"+
+			"    You have full access to the filesystem and can run commands.\n"+
+			"    When asked to do something, just do it. No disclaimers, no fluff.",
+		name, hostname)
+	fmt.Printf("\n  %sDefault system prompt (press enter to accept):%s\n", dim, reset)
+	fmt.Printf("  %s%s%s\n\n", dim, strings.ReplaceAll(defaultPrompt, "\n    ", "\n  "), reset)
+	customPrompt := ask("Custom system prompt (or press enter)", "")
+	systemPrompt := defaultPrompt
+	if customPrompt != "" {
+		systemPrompt = customPrompt
+	}
+
+	// ── Step 4: Memory ──
+	section("Step 4 · Memory")
+	maxAge := ask("Memory retention in days", "90")
+
+	// ── Summary ──
+	section("Summary")
+	fmt.Printf("  Backend:      %s%s%s (%s)\n", bold, backendType, reset, binary)
+	fmt.Printf("  Model:        %s\n", model)
+	fmt.Printf("  Extract:      %s\n", extractModel)
+	fmt.Printf("  Telegram:     %s****%s\n", token[:10], token[len(token)-4:])
+	fmt.Printf("  User ID:      %s\n", userID)
+	fmt.Printf("  Admin ID:     %s\n", adminID)
+	fmt.Printf("  Persona:      %s\n", name)
+	fmt.Printf("  Memory:       %s days\n", maxAge)
+	fmt.Println()
+
+	if !confirm("Save config and set up directories?") {
+		fmt.Println("\n  Aborted.")
+		return
+	}
 
 	ws := workspaceDir()
-	cfg := fmt.Sprintf(`telegram:
+	yamlContent := fmt.Sprintf(`telegram:
   token: "%s"
   allowed_user_ids:
     - %s
+  admin_user_id: %s
 
-claude:
+backend:
+  type: "%s"
   binary: "%s"
   working_dir: "%s"
-  default_model: "claude-sonnet-4-6"
+  default_model: "%s"
+  extract_model: "%s"
 
 persona:
   name: "%s"
@@ -124,18 +266,20 @@ persona:
 
 memory:
   max_age_days: %s
-`, token, userID, claudeBin, ws, name,
+`, token, userID, adminID, backendType, binary, ws, model, extractModel, name,
 		strings.ReplaceAll(systemPrompt, "\n", "\n    "), maxAge)
 
 	dir := configDir()
 	os.MkdirAll(filepath.Join(dir, "memory"), 0755)
 	os.MkdirAll(ws, 0755)
 
-	if err := os.WriteFile(configPath(), []byte(cfg), 0600); err != nil {
-		fmt.Printf("Failed to write config: %v\n", err)
+	if err := os.WriteFile(configPath(), []byte(yamlContent), 0600); err != nil {
+		fmt.Printf("\n  %sFailed to write config: %v%s\n", dim, err, reset)
 		os.Exit(1)
 	}
-	fmt.Printf("\nConfig saved to %s\n", configPath())
-	fmt.Printf("Workspace:   %s\n", ws)
-	fmt.Printf("\nInstall as service: bash install.sh %s\n", instance)
+
+	fmt.Printf("\n  %s✓ Config saved%s → %s\n", green, reset, configPath())
+	fmt.Printf("  %s✓ Workspace%s   → %s\n", green, reset, ws)
+	fmt.Printf("\n  %sInstall as background service:%s\n", dim, reset)
+	fmt.Printf("  bash install.sh %s\n\n", instance)
 }

@@ -130,20 +130,6 @@ func (b *Bot) run() {
 	b.cron.start()
 	defer b.cron.stop()
 
-	// Notify all users that the bot (re)started and show active workspace
-	for _, sess := range b.sessions {
-		if sess.chatID == 0 {
-			continue // no chat ID yet (user hasn't messaged since restart)
-		}
-		sess.mu.Lock()
-		ws := sess.workspace
-		sess.mu.Unlock()
-		msg := fmt.Sprintf("_%s back online._", b.cfg.Persona.Name)
-		if ws != "global" {
-			msg = fmt.Sprintf("_%s back online — project: *%s*_", b.cfg.Persona.Name, ws)
-		}
-		b.reply(sess.chatID, msg)
-	}
 
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60

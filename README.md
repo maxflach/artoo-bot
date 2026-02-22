@@ -229,15 +229,14 @@ Send any plain text message — it goes straight to your configured agentic CLI,
 
 | Command | Description |
 |---|---|
-| `/project` | Show current project |
-| `/project list` | List all your projects |
-| `/project <name>` | Switch to (or create) a project |
-| `/project <name> \| <description>` | Create a new project and generate a README |
-| `/project update` | Improve the current project's README |
-| `/project update <instruction>` | Update README with a specific change |
-| `/memory` | Show recent memories |
+| `/project` | Button menu — tap to switch project (✓ marks active) |
+| `/project <name>` | Switch to (or create) a project directly |
+| `/project <name> \| <description>` | Create a new project — walks through 3 setup questions (research type, auto PDF, agent style) then generates a README |
+| `/project update` | Button menu — Improve README / Change agent style / View schedules |
+| `/project update <instruction>` | Update the current README with a specific instruction |
+| `/memory` | Show recent memories for the current project |
 | `/remember <fact>` | Save a fact to the current project memory |
-| `/remember --global <fact>` | Save to global memory (shared across projects) |
+| `/remember --global <fact>` | Save to global memory (shared across all projects) |
 | `/files` | List recently created files |
 | `/model` | Show the active model |
 | `/model <name>` | Switch model for this session |
@@ -246,7 +245,7 @@ Send any plain text message — it goes straight to your configured agentic CLI,
 | `/schedule <name> \| <when> \| <prompt>` | Recurring scheduled task |
 | `/schedules` | List your scheduled tasks (with remove buttons) |
 | `/unschedule <id>` | Remove a scheduled task |
-| `/skills` | List loaded custom skill commands |
+| `/skills` | Button menu — tap any skill to run it |
 | `/skills reload` | Reload skills from disk without restarting _(admin only)_ |
 | `/secret set <name> <value> --skill <skill>` | Store a credential for the current project |
 | `/secret set --global <name> <value> --skill <skill>` | Store a credential for all your projects |
@@ -258,6 +257,8 @@ Send any plain text message — it goes straight to your configured agentic CLI,
 | `/new` | Fresh start — clear history and reset to global |
 | `/clear` | Clear conversation history only |
 | `/help` | Show all commands |
+| `/wish <message>` | Submit a feature request |
+| `/wishes` | List all wishes with inline "Mark done" buttons _(admin only)_ |
 | `/apikey new <name>` | Create a new API key _(admin only)_ |
 | `/apikeys` | List all API keys with last-used time _(admin only)_ |
 | `/apikey revoke <id>` | Revoke an API key _(admin only)_ |
@@ -267,7 +268,7 @@ Send any plain text message — it goes straight to your configured agentic CLI,
 Projects are the core concept. Each project gets:
 
 - Its own directory on the machine
-- A `README.md` that the AI reads on every run (defines purpose, instructions, data schema)
+- A `README.md` that the bot injects into every prompt (defines purpose, instructions, data schema)
 - Its own memory (extracted automatically after each conversation)
 - Its own file history
 - Its own schedules
@@ -276,7 +277,12 @@ Projects are the core concept. Each project gets:
 /project research | Track industry news and produce weekly PDF digests
 ```
 
-This creates the project directory and generates a README based on your description. From then on, every message in that project context includes the README as instructions.
+Creating a project with a description triggers a 3-step setup:
+1. **Research type?** — tailors the README structure for data gathering vs general work
+2. **Auto PDF reports?** — if yes, Claude writes `report.md` after each run and the bot converts it to a PDF automatically
+3. **Agent style?** — choose how the AI approaches work in this project: General, Researcher, Engineer, Analyst, or Writer. The chosen style is written into the README as an `## Agent` section.
+
+From then on, every message in that project context includes the README (with agent style) as instructions. Change the style anytime via `/project update` → *Change agent style*.
 
 ### Scheduling
 

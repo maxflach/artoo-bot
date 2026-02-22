@@ -1,5 +1,6 @@
 # Build output
 bot
+releases/
 
 # Config files (contain tokens and user IDs)
 config.yaml

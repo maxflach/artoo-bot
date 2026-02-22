@@ -91,7 +91,24 @@ brew install go
 
 ## Installation
 
-### Clone and build
+### Download a pre-built binary
+
+Grab the latest release for your platform from the [Releases page](https://github.com/maxflach/artoo-bot/releases):
+
+| Platform | Binary |
+|---|---|
+| macOS (Apple Silicon) | `artoo-darwin-arm64` |
+| macOS (Intel) | `artoo-darwin-amd64` |
+| Linux (x86_64) | `artoo-linux-amd64` |
+| Linux (ARM64) | `artoo-linux-arm64` |
+
+```bash
+chmod +x artoo-*
+mv artoo-* bot
+./bot --setup
+```
+
+### Or build from source
 
 ```bash
 git clone https://github.com/maxflach/artoo-bot
@@ -105,14 +122,19 @@ go build -o bot .
 ./bot --setup
 ```
 
-The wizard walks you through:
+The wizard walks through five steps:
 
-1. **Backend** — choose your agentic CLI; auto-detects the binary
-2. **Telegram** — bot token and your user ID
-3. **Persona** — bot name and system prompt
-4. **Memory** — how long to retain memories (default: 90 days)
+**Step 1 · Backend** — choose your agentic CLI. Auto-detects the binary path if it's in a standard location. Set the default model and a separate (cheaper) model for background memory extraction.
 
-Config is saved to `~/.config/bot/default/config.yaml`. The file is excluded from git — it contains your bot token.
+**Step 2 · Telegram** — paste your bot token from BotFather and your numeric Telegram user ID. Optionally set a separate admin ID (defaults to your own ID).
+
+**Step 3 · Persona** — give the bot a name and write a system prompt. A default is suggested based on the bot name and hostname — press enter to accept it.
+
+**Step 4 · Memory** — how many days to retain memories (default: 90).
+
+**Step 5 · REST API** — port for the HTTP API (default: 8088, set to 0 to disable).
+
+A summary is shown before anything is written. Config is saved to `~/.config/bot/default/config.yaml` — excluded from git since it contains your bot token.
 
 ### Install as a background service
 

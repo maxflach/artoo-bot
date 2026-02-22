@@ -107,6 +107,41 @@ Then run the setup wizard:
 artoo --setup
 ```
 
+### Docker
+
+No Go toolchain required. The image ships with Claude Code, `pdftotext`, `pandoc`, and `python3`/`openpyxl` pre-installed.
+
+**Prerequisites:**
+1. Authenticate Claude Code on the host once: `claude login`
+2. Create your config at `~/.config/bot/default/config.yaml` (run `./bot --setup` natively, or copy the template from the Configuration section below). Set `backend.binary: /usr/local/bin/claude` — that's where the CLI lives inside the container.
+
+**Start:**
+```bash
+git clone https://github.com/maxflach/artoo-bot
+cd artoo-bot
+docker compose up -d
+```
+
+**Named instance:**
+```bash
+docker compose run --rm artoo --instance workbot
+```
+
+**Volumes mounted by `docker-compose.yml`:**
+
+| Host path | Container path | Contains |
+|---|---|---|
+| `~/.config/bot` | `/root/.config/bot` | Config YAML + SQLite DB |
+| `~/bot-workspace` | `/root/bot-workspace` | Claude's working directories |
+| `~/.claude` | `/root/.claude` | Claude Code auth token |
+
+**Logs:**
+```bash
+docker compose logs -f
+```
+
+---
+
 ### Or build from source
 
 Requires Go 1.26+.
@@ -603,6 +638,7 @@ Everything else — web search, file manipulation, code execution, PDF generatio
 - [x] Secrets vault — encrypted credentials scoped per-project and locked to specific skills
 - [x] Image generation — `/imagine` demo skill via Gemini Imagen
 - [x] Multi-transport — Telegram, Discord, web chat
+- [x] Docker support — `Dockerfile` + `docker-compose.yml` with Claude Code, pdf tools, and python pre-installed
 - [ ] Voice message support
 - [ ] Multi-modal file handling (images, audio)
 

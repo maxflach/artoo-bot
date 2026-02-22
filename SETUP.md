@@ -82,10 +82,12 @@ telegram:
   allowed_user_ids:
     - 123456789  # your Telegram user ID
 
-claude:
+backend:
+  type: "claude-code"
   binary: "/Users/you/.local/bin/claude"
   working_dir: "/Users/you/bot-workspace/name"
   default_model: "claude-sonnet-4-6"
+  extract_model: "claude-haiku-4-5"
 
 persona:
   name: "Rex"
@@ -158,6 +160,29 @@ launchctl kickstart gui/$(id -u)/com.bot.claude.rex
 
 # View logs
 tail -f ~/code/bot/bot.rex.err
+```
+
+---
+
+## Docker
+
+Instead of building natively, you can run the bot in Docker. The image includes Claude Code, `pdftotext`, `pandoc`, and `python3`.
+
+```bash
+# One-time: authenticate Claude Code on the host
+claude login
+
+# Set backend.binary: /usr/local/bin/claude in your config, then:
+docker compose up -d
+
+# Named instance
+docker compose run --rm artoo --instance workbot
+
+# Logs
+docker compose logs -f
+
+# Update
+docker compose build --no-cache && docker compose up -d
 ```
 
 ---

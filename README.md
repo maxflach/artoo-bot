@@ -477,7 +477,34 @@ memory:
 
 api:
   port: 8088  # set to 0 to disable; required for web chat
+
+# Optional: grant users access to directories outside their sandbox
+# allowed_paths:
+#   yourusername:
+#     - path: /Users/you/code
+#       alias: code        # optional; defaults to the directory name
+#     - path: /Users/you/Documents/notes
+#       alias: notes
 ```
+
+#### Allowed external paths
+
+By default each user is sandboxed to `~/bot-workspace/<instance>/<userID>/`. The `allowed_paths` block lets you grant specific users read/write access to additional directories on the machine — for example, a shared code repository or a notes folder.
+
+```yaml
+allowed_paths:
+  maxflach:
+    - path: /Users/max/code
+      alias: code
+    - path: /Users/max/Documents/notes
+      alias: notes
+```
+
+- Keyed by the Telegram username stored in the `approved_users` table (the same handle shown in `/wishes`)
+- `alias` is optional — defaults to the directory's base name
+- Takes effect on the next bot restart; unknown usernames log a warning and are skipped
+- Allowed directories appear in the `/project` menu with an `[ext]` prefix and can be switched to like any other project
+- Claude's system prompt is updated with a `~/alias/...` shorthand for each allowed directory
 
 ---
 
@@ -645,6 +672,7 @@ Everything else — web search, file manipulation, code execution, PDF generatio
 - [x] Image generation — `/imagine` demo skill via Gemini Imagen
 - [x] Multi-transport — Telegram, Discord, web chat
 - [x] Docker support — `Dockerfile` + `docker-compose.yml` with Claude Code, pdf tools, and python pre-installed
+- [x] Allowed external paths — admin-provisioned access to directories outside the user sandbox
 - [ ] Voice message support
 - [ ] Multi-modal file handling (images, audio)
 

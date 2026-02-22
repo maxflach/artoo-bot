@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.12 — 2026-02-22
+
+### Added
+- **Allowed external paths** — admins can grant specific users access to directories outside their sandboxed workspace by editing `config.yaml`:
+  ```yaml
+  allowed_paths:
+    maxflach:
+      - path: /Users/max/code
+        alias: code
+      - path: /Users/max/Documents/notes
+        alias: notes
+  ```
+  Keyed by username (resolved to user ID at startup via `approved_users`). Unknown usernames log a warning and are skipped. Takes effect on restart.
+- **External paths in `/project` menu** — allowed external dirs appear with an `[ext]` prefix and tap-to-switch buttons, alongside regular projects
+- **`projpath:` callback** — Telegram inline button callback for switching to an external directory by absolute path
+- **Allowed External Directories system prompt block** — when a user has external paths, their system prompt includes a `## Allowed External Directories` section with `~/alias/...` shorthands
+- **`displayPathEx()`** — path display helper that maps external dirs to `~/alias/...` shorthand for user-visible output
+- **Absolute path guard in `/project`** — bare absolute paths not in the allowed list are now rejected with an error
+
+### Changed
+- **Working directory STRICT RULES** — updated to say "stay inside your working directory *or any allowed external directories listed below*" when external paths are configured
+- **`handleWorkspace()` base-dir derivation** — always uses the canonical user workspace root (`userWorkingDir(...)`) regardless of whether the user is currently in an external path, preventing incorrect `filepath.Dir` of an external path
+
+---
+
 ## v0.11.4 — 2026-02-22
 
 ### Changed

@@ -282,6 +282,16 @@ Everything else — web search, file manipulation, code execution, PDF generatio
 
 ---
 
+## Why Artoo?
+
+I'm a Star Wars fan. The name felt right for a loyal, always-on robot that just gets things done without making a fuss. Call yours whatever you want — the persona name and system prompt are fully configurable in the setup wizard.
+
+<p align="center">
+  <img src="artoo.png" width="480" alt="Artoo — R2-D2 in a server room" />
+</p>
+
+---
+
 ## License
 
 MIT

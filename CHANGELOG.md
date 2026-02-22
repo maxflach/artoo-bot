@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.3 — 2026-02-22
+
+### Added
+- **Skills system** — drop `.md` prompt templates or executable files (or folders with `run.sh`) into a `skills/` directory to create custom `/commands`; no code changes needed
+- **Skill locations** searched in order: global (`~/.config/bot/skills/`), per-instance (`~/.config/bot/<instance>/skills/`), per-project (`<project>/skills/`); later entries override earlier
+- **Folder-based skills** — a skill folder can bundle data files alongside its entrypoint (e.g. `dadjoke/run.sh` + `dadjoke/jokes.json`)
+- **`/skills`** — list all loaded skills with type and description
+- **`/skills reload`** — reload skills from disk without restarting the bot (admin only)
+- **MCP server** — skills exposed as MCP tools on the existing API server (`/mcp/sse`, `/mcp/message`); Claude can call them mid-task via JSON-RPC 2.0 over SSE
+- **Auto-registration** — on startup, artoo writes its MCP server entry to `~/.claude.json` with a dedicated `artoo-mcp` API key (skips if already configured)
+- **Skills in system prompt** — available skills listed in Claude's context so it's aware of them even without MCP
+- **Demo skill: `dadjoke`** — folder-based script skill bundled with `jokes.json`; installed automatically by `install.sh`
+
+---
+
 ## v0.2 — 2026-02-22
 
 ### Added

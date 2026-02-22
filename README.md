@@ -23,7 +23,7 @@ A few other things that mattered to me:
 - **Persistence that survives restarts.** Sessions, active projects, and schedules are all stored in SQLite. Reboot the machine, the bot picks up exactly where it left off.
 - **Async scheduling.** Natural language cron expressions. "Every weekday at 9am" or "in 2 hours" just work. One-off reminders clean themselves up automatically.
 
-What's coming next: support for custom skills and a local MCP server to register and run them — so you can extend the bot's capabilities without touching the core code.
+v0.3 added a skills system and a local MCP server — drop a script or markdown file into a `skills/` folder to create new `/commands`, no code changes needed. Skills are also exposed as MCP tools Claude can call mid-task.
 
 ---
 
@@ -36,7 +36,8 @@ What's coming next: support for custom skills and a local MCP server to register
 | Multi-user | Yes — one instance, isolated per user | Typically one instance per user |
 | Projects | Yes — README-driven, per-user, with their own dirs | Workspace support |
 | Scheduling | Built-in (natural language cron) | Varies |
-| Skills / plugins | Coming (local MCP server) | Built-in skill system |
+| Skills / plugins | Yes — custom `/commands` via `skills/` folders | Built-in skill system |
+| MCP server | Yes — skills exposed as tools at `/mcp/sse` | No |
 | Setup | Single binary + interactive wizard | Interactive wizard |
 | Philosophy | Delegate everything to the AI tool | Custom agent with its own tool layer |
 
@@ -110,7 +111,7 @@ artoo --setup
 ```bash
 git clone https://github.com/maxflach/artoo-bot
 cd artoo-bot
-go build -o bot .
+cd src && go build -o ../bot .
 ```
 
 ### Run the setup wizard
@@ -190,6 +191,8 @@ Send any plain text message — it goes straight to your configured agentic CLI,
 | `/schedule <name> \| <when> \| <prompt>` | Recurring scheduled task |
 | `/schedules` | List your scheduled tasks (with remove buttons) |
 | `/unschedule <id>` | Remove a scheduled task |
+| `/skills` | List loaded custom skill commands |
+| `/skills reload` | Reload skills from disk without restarting _(admin only)_ |
 | `/new` | Fresh start — clear history and reset to global |
 | `/clear` | Clear conversation history only |
 | `/help` | Show all commands |
@@ -245,6 +248,46 @@ persona:
     Be brief. Prefer bullet points over paragraphs.
     When asked to do something, do it — no caveats.
 ```
+
+### Skills
+
+Drop a file or folder into a `skills/` directory to create a new `/command` — no code changes needed.
+
+**Skill locations** (searched in order, later entries override earlier):
+
+| Path | Scope |
+|---|---|
+| `~/.config/bot/skills/` | Global — all instances |
+| `~/.config/bot/<instance>/skills/` | Per-instance |
+| `<project_dir>/skills/` | Per-project (active project only) |
+
+**Skill types:**
+
+- **Executable** (`.sh` or any executable file) — run with user input as `$1`; stdout returned to the user
+- **Markdown** (`.md`) — contents prepended to the user's input and run through Claude
+
+**Folder-based skills** — a skill can be a folder. The entrypoint is `run.sh` (or `run`). The folder can contain data files.
+
+```
+~/.config/bot/skills/
+└── dadjoke/
+    ├── run.sh       # entrypoint — picked up automatically
+    └── jokes.json   # bundled data file
+```
+
+A demo `dadjoke` skill is installed automatically by `install.sh`. To see what's loaded:
+
+```
+/skills
+```
+
+To add a new skill and pick it up without restarting:
+
+```
+/skills reload
+```
+
+Skills are also exposed as MCP tools — see the MCP Server section below.
 
 ### User approval
 
@@ -381,12 +424,45 @@ curl -s -X POST http://localhost:8088/v1/run \
 
 ---
 
+## MCP Server
+
+When the API is enabled, the bot runs an MCP server on the same port, exposing all loaded skills as tools Claude can call mid-task.
+
+**Endpoints:**
+
+| Endpoint | Description |
+|---|---|
+| `GET /mcp/sse` | SSE stream — sends `endpoint` event with the message URL |
+| `POST /mcp/message?id=<conn>` | JSON-RPC 2.0 messages (`initialize`, `tools/list`, `tools/call`) |
+
+Both endpoints require the same Bearer token auth as the REST API.
+
+**Auto-registration:** On first startup (when `api.port` is set), artoo writes its MCP server entry to `~/.claude.json` and generates a dedicated `artoo-mcp` API key. After a restart, Claude Code picks it up automatically — no manual config needed.
+
+```json
+{
+  "mcpServers": {
+    "artoo": {
+      "type": "sse",
+      "url": "http://localhost:8088/mcp/sse",
+      "headers": { "Authorization": "Bearer artoo_..." }
+    }
+  }
+}
+```
+
+Each skill becomes a tool with the skill's name and description. Claude can call `/dadjoke`, or any other skill, as part of a task.
+
+---
+
 ## Architecture
 
 ```
 Telegram ──→ Bot (Go) ←── HTTP API  (Bearer token auth)
+                │               └── MCP server  (/mcp/sse, /mcp/message)
                 ├── SQLite  (memories, projects, schedules, users, api keys)
                 ├── Cron runner  (schedules, one-off reminders)
+                ├── Skills  (~/.config/bot/skills/, per-instance, per-project)
                 └── exec.Command  ──→  agentic CLI  (claude, opencode, ...)
                                             └── runs on your machine
                                                 with full filesystem access
@@ -405,8 +481,8 @@ Everything else — web search, file manipulation, code execution, PDF generatio
 
 ## Roadmap
 
-- [ ] Custom skills (define your own `/commands` without editing Go code)
-- [ ] Local MCP server for skill registration and execution
+- [x] Custom skills — drop scripts or prompts into `skills/` to create `/commands`
+- [x] MCP server — skills exposed as tools for Claude mid-task
 - [ ] Voice message support
 - [ ] Image generation commands
 - [ ] Multi-modal file handling (images, audio)

@@ -98,16 +98,16 @@ artoo --setup
 
 ### Or build from source
 
-Requires Go 1.21+.
+Requires Go 1.26+.
 
 ```bash
 # macOS
 brew install go
 
 # Linux (replace the version number with the latest from https://go.dev/dl/)
-curl -OL https://go.dev/dl/go1.24.0.linux-amd64.tar.gz
+curl -OL https://go.dev/dl/go1.26.0.linux-amd64.tar.gz
 sudo rm -rf /usr/local/go
-sudo tar -C /usr/local -xzf go1.24.0.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.26.0.linux-amd64.tar.gz
 echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.profile
 source ~/.profile
 

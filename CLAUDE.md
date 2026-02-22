@@ -65,7 +65,7 @@ The app is a single Go binary with no subpackages. All source is in `src/`:
 - `gopkg.in/yaml.v3` — config parsing
 - `github.com/google/uuid` — API key generation
 
-Go version: 1.25.7. No test files exist in the codebase.
+Go version: 1.26.0. No test files exist in the codebase.
 
 ## API Documentation
 

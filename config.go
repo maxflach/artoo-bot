@@ -231,6 +231,11 @@ func runOnboarding() {
 	section("Step 4 · Memory")
 	maxAge := ask("Memory retention in days", "90")
 
+	// ── Step 5: API ──
+	section("Step 5 · REST API")
+	fmt.Printf("  %sThe bot can expose an HTTP API so scripts and services on your machine\n  can trigger messages and run tasks. Set port to 0 to disable.%s\n\n", dim, reset)
+	apiPort := ask("API port", "8088")
+
 	// ── Summary ──
 	section("Summary")
 	fmt.Printf("  Backend:      %s%s%s (%s)\n", bold, backendType, reset, binary)
@@ -241,6 +246,11 @@ func runOnboarding() {
 	fmt.Printf("  Admin ID:     %s\n", adminID)
 	fmt.Printf("  Persona:      %s\n", name)
 	fmt.Printf("  Memory:       %s days\n", maxAge)
+	apiPortLabel := apiPort
+	if apiPort == "0" {
+		apiPortLabel = "disabled"
+	}
+	fmt.Printf("  API:          port %s\n", apiPortLabel)
 	fmt.Println()
 
 	if !confirm("Save config and set up directories?") {
@@ -269,8 +279,11 @@ persona:
 
 memory:
   max_age_days: %s
+
+api:
+  port: %s
 `, token, userID, adminID, backendType, binary, ws, model, extractModel, name,
-		strings.ReplaceAll(systemPrompt, "\n", "\n    "), maxAge)
+		strings.ReplaceAll(systemPrompt, "\n", "\n    "), maxAge, apiPort)
 
 	dir := configDir()
 	os.MkdirAll(filepath.Join(dir, "memory"), 0755)

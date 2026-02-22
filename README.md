@@ -6,28 +6,25 @@ A personal bot that gives you remote access to an agentic CLI running on your ow
 
 ## Why I Built This
 
-There are good tools in this space already. [OpenClaw](https://github.com/openclaw) and similar projects work well and are actively maintained. This is not an attempt to replace them or compete feature-for-feature.
+Most Telegram AI bots work the same way: your message goes to an API, text comes back. That's fine for chat. It's not useful for actual work.
 
-I built this because I had a specific frustration: most Telegram AI bots call external APIs directly — they send your prompt to a model, get a response, and send it back. That works fine for conversation, but it means the AI is just generating text. It can't actually *do* things on your machine.
+What I wanted was remote access to the agentic tools I was already running on my machine — Claude Code specifically. Not a wrapper around a raw model API. The tool itself, running on my hardware, with access to my files, able to search the web, write code, and chain tasks together without hitting a timeout.
 
-What I wanted was the opposite: let the tool handle the heavy lifting. Agentic CLIs are already built for this kind of work. They know how to search the web, read and write files, run code, and chain tasks together. The results feel noticeably better than calling the raw API because the tool has been optimised for exactly this kind of multi-step reasoning and execution.
+So instead of building an agent, I built a shell. A thin layer that handles auth, routing, sessions, memory, and scheduling — and hands everything else off to the CLI. This is a deliberate bet: the agent loop is the hard part, and Anthropic has already built a very good one. Every time they ship an improvement to Claude Code, I get it for free. I don't own the reasoning. I own the plumbing.
 
-The mental model I was going for is closer to Claude's own "computer use" or the spirit of claude.ai's Projects — but accessible via Telegram, running on my hardware, with my files available.
+**The security model matters too.** When you use a hosted AI bot, your prompts and file context go to someone else's infrastructure. Here, the agentic CLI runs on your machine. Nothing leaves except the Telegram message itself. Credentials go through an encrypted secrets vault — AES-256-GCM, locked to a specific skill, never passed to Claude. If you trust Claude Code running locally, you trust this. It adds no new attack surface.
 
-My main use case is **async research**. I fire off a task — "search for the latest news on this topic and send me a summary when you're done" — and let it run. The result arrives when it's done, not when a 30-second API timeout kicks in. That changes how you use it.
+The main thing this unlocks is **async task execution**. Fire off "research this topic, write a digest, save it as a PDF" and put your phone down. The result arrives when it's done — five minutes, ten minutes, whatever it takes. No timeout, no waiting at a terminal. That changes how you use AI for research.
 
-A few other things that mattered to me:
+A few other things that shaped the design:
 
 - **Multi-user, single instance.** Most self-hosted bots run one instance per user. I wanted one bot that handles multiple people, each fully isolated — their own projects, memory, files, working directories, and schedules. No separate deployments.
-- **Projects with real context.** Each project has a README that the AI reads on every run. That README defines the project's purpose, focus, data schema, and step-by-step instructions. The AI doesn't need to re-learn what the project is — it's all there.
+- **Projects with real context.** Each project has a README that the AI reads on every run. That README defines the project's purpose, focus, data schema, and step-by-step instructions. The AI doesn't need to re-learn what the project is — it's all there. Because the model always has the right context, it's far less likely to hallucinate or go off-track. Grounded prompts produce grounded results.
 - **Persistence that survives restarts.** Sessions, active projects, and schedules are all stored in SQLite. Reboot the machine, the bot picks up exactly where it left off.
 - **Async scheduling.** Natural language cron expressions. "Every weekday at 9am" or "in 2 hours" just work. One-off reminders clean themselves up automatically.
+- **Skills as scripts.** Drop a shell script or markdown prompt into a `skills/` folder and it becomes a `/command`. Those same skills are automatically exposed as MCP tools Claude can call mid-task. No code changes needed.
 
-v0.3 added a skills system and a local MCP server — drop a script or markdown file into a `skills/` folder to create new `/commands`, no code changes needed. Skills are also exposed as MCP tools Claude can call mid-task.
-
-v0.4 adds a secrets vault. Skills can now declare which credentials they need, store them encrypted, and receive them as environment variables at runtime — without ever exposing values to Claude or other skills.
-
-v0.6 adds multi-transport support. The bot is no longer Telegram-only — you can run Discord and a browser-based web chat UI alongside Telegram, all sharing the same sessions, memory, and schedules.
+There are good tools in this space already — [OpenClaw](https://github.com/openclaw) and similar projects work well and are actively maintained. This isn't an attempt to compete feature-for-feature. It's a different architectural bet: delegate everything to the AI tool rather than building your own tool layer.
 
 ---
 

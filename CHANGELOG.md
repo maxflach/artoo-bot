@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.11.1 — 2026-02-22
+
+### Changed
+- **Project isolation explained** — `/help` Projects section now describes that each project has its own directory, README, memory, files, and schedules, and that memories don't bleed between projects
+- **Project list subtitle** — button menu and text fallback both include a one-line explanation of project isolation
+- **`/memory` / `/remember` help text** — clarified that `/memory` is scoped to the current project and `--global` saves across all projects
+- Wish #1 implemented and marked done
+
+---
+
+## v0.11 — 2026-02-22
+
+### Added
+- **Agent style presets** — project creation now has a third button step; choose a working style (General, Researcher, Engineer, Analyst, Writer) that gets written as a `## Agent` section in the README
+- **`/project update` → Change agent style** — button menu lets you switch the agent style of an existing project without regenerating the whole README
+- **`SendButtonMenu`** — new `RichTransport` method; sends a vertical button menu (one button per row); used throughout
+- **`richTransport` helper** — reduces boilerplate for RichTransport checks across `main.go`
+- New callback prefixes: `projswitch:`, `projupdate:`, `projstyleset:`, `skillrun:`, `wishdone:`
+
+### Changed
+- **`/project` / `/project list`** — now shows a tappable vertical button menu of all projects (✓ on active); falls back to text on non-Telegram transports
+- **`/project update`** (no args) — now shows a button menu: Improve README / Change agent style / View schedules
+- **`/skills`** — lists skills as tappable buttons that run the skill directly; falls back to text
+- **`/wishes`** (admin) — each undone wish gets an inline "✓ Mark done" button
+- Non-admin callbacks (`projsetup:`, `projswitch:`, `projupdate:`, `projstyleset:`, `skillrun:`) are now handled before the admin check so all approved users can interact with buttons
+
+---
+
 ## v0.10 — 2026-02-22
 
 ### Added

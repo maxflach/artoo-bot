@@ -1,6 +1,6 @@
 # Artoo Bot
 
-A personal Telegram bot that gives you remote access to Claude Code (or OpenCode) running on your own machine. Send a message, get things done — research, file work, scheduled tasks, and more.
+A personal Telegram bot that gives you remote access to an agentic CLI running on your own machine. Send a message, get things done — research, file work, scheduled tasks, and more.
 
 ---
 
@@ -10,7 +10,7 @@ There are good tools in this space already. [OpenClaw](https://github.com/opencl
 
 I built this because I had a specific frustration: most Telegram AI bots call external APIs directly — they send your prompt to a model, get a response, and send it back. That works fine for conversation, but it means the AI is just generating text. It can't actually *do* things on your machine.
 
-What I wanted was the opposite: let the tool — Claude Code, OpenCode, or similar — handle the heavy lifting. These tools are already built for agentic work. They know how to search the web, read and write files, run code, and chain tasks together. The results feel noticeably better than calling the raw API because the tool has been optimised for exactly this kind of multi-step reasoning and execution.
+What I wanted was the opposite: let the tool handle the heavy lifting. Agentic CLIs are already built for this kind of work. They know how to search the web, read and write files, run code, and chain tasks together. The results feel noticeably better than calling the raw API because the tool has been optimised for exactly this kind of multi-step reasoning and execution.
 
 The mental model I was going for is closer to Claude's own "computer use" or the spirit of claude.ai's Projects — but accessible via Telegram, running on my hardware, with my files available.
 
@@ -31,8 +31,8 @@ What's coming next: support for custom skills and a local MCP server to register
 
 | | Artoo Bot | OpenClaw |
 |---|---|---|
-| Execution | Runs Claude Code / OpenCode on your machine | Runs its own agent loop |
-| Web search | Delegated to the AI tool (Claude's built-in WebSearch) | Calls Brave/DuckDuckGo API directly |
+| Execution | Delegates to any agentic CLI on your machine | Runs its own agent loop |
+| Web search | Delegated to the CLI tool (built-in to most) | Calls Brave/DuckDuckGo API directly |
 | Multi-user | Yes — one instance, isolated per user | Typically one instance per user |
 | Projects | Yes — README-driven, per-user, with their own dirs | Workspace support |
 | Scheduling | Built-in (natural language cron) | Varies |
@@ -50,9 +50,9 @@ The key philosophical difference: this bot is a thin shell around an existing ag
 
 The bot runs as a background service on a Linux or macOS machine with internet access. It needs to stay running to handle scheduled tasks.
 
-### 2. Claude Code or OpenCode
+### 2. An agentic CLI
 
-The bot shells out to one of these. You need at least one installed and authenticated.
+The bot shells out to whichever CLI you configure. You need at least one installed and authenticated. Two good options:
 
 **Claude Code:**
 ```bash
@@ -64,6 +64,8 @@ claude  # follow login prompts
 ```bash
 # See https://github.com/sst/opencode for install instructions
 ```
+
+Any CLI that accepts a prompt and returns text output can work — configure it under `backend` in the setup wizard.
 
 ### 3. A Telegram Bot
 
@@ -105,7 +107,7 @@ go build -o bot .
 
 The wizard walks you through:
 
-1. **Backend** — Claude Code or OpenCode; auto-detects the binary
+1. **Backend** — choose your agentic CLI; auto-detects the binary
 2. **Telegram** — bot token and your user ID
 3. **Persona** — bot name and system prompt
 4. **Memory** — how long to retain memories (default: 90 days)
@@ -146,7 +148,7 @@ Each instance gets its own config (`~/.config/bot/workbot/`) and workspace (`~/b
 
 ### Talking to the bot
 
-Send any plain text message — it goes straight to Claude Code running on your machine in the current project's directory.
+Send any plain text message — it goes straight to your configured agentic CLI, running on your machine in the current project's directory.
 
 ### Commands
 
@@ -187,7 +189,7 @@ Projects are the core concept. Each project gets:
 /project MusicDataLabs | Monitor the sync licensing industry and produce weekly PDF digests
 ```
 
-This creates the project directory and asks Claude Code to write a README based on your description. From then on, every message in that project context includes the README as instructions.
+This creates the project directory and generates a README based on your description. From then on, every message in that project context includes the README as instructions.
 
 ### Scheduling
 
@@ -257,7 +259,7 @@ The Go process is intentionally thin. It handles:
 - Cron scheduling
 - File uploads and delivery
 
-Everything else — web search, file manipulation, code execution, PDF generation — is delegated to Claude Code. The system prompt includes the persona, working directory rules, the project README, relevant memories, and recent conversation history.
+Everything else — web search, file manipulation, code execution, PDF generation — is delegated to the configured CLI tool. The system prompt includes the persona, working directory rules, the project README, relevant memories, and recent conversation history.
 
 ---
 

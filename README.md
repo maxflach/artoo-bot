@@ -40,7 +40,7 @@ What's coming next: support for custom skills and a local MCP server to register
 | Setup | Single binary + interactive wizard | Interactive wizard |
 | Philosophy | Delegate everything to the AI tool | Custom agent with its own tool layer |
 
-The key philosophical difference: this bot is a thin shell around an existing agentic tool. It handles auth, routing, memory, and scheduling — then hands the actual work off to Claude Code. OpenClaw builds its own tool layer. Neither is wrong; they're just different bets on where the intelligence should live.
+The key philosophical difference: this bot is a thin shell around an existing agentic CLI. It handles auth, routing, memory, and scheduling — then hands the actual work off to whatever tool you configure. I use Claude Code personally, but any agentic CLI that accepts a prompt and returns output will work. OpenClaw builds its own tool layer. Neither is wrong; they're just different bets on where the intelligence should live.
 
 ---
 

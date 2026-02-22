@@ -1,35 +1,36 @@
 #!/bin/bash
-# install.sh — install/reinstall a bot instance as a LaunchAgent
+# install.sh — install a bot instance as a background service
+# Supports macOS (LaunchAgent) and Linux (systemd user service)
+#
 # Usage: bash install.sh [instance-name]
 #   instance-name defaults to "default"
-# Examples:
-#   bash install.sh         → installs "default" instance
-#   bash install.sh rex     → installs "rex" instance
-#   bash install.sh sara    → installs "sara" instance
 set -e
 
 INSTANCE="${1:-default}"
-LABEL="com.bot.claude.$INSTANCE"
-PLIST_DIR="$HOME/Library/LaunchAgents"
-PLIST="$PLIST_DIR/$LABEL.plist"
 BOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+OS="$(uname -s)"
 
 echo "Installing bot instance: $INSTANCE"
 
-# Remove old system daemon if it exists (requires sudo once, backwards compat)
-if sudo launchctl print system/com.bot.claude &>/dev/null 2>&1; then
-    echo "Removing old system daemon..."
-    sudo launchctl bootout system /Library/LaunchDaemons/com.bot.claude.plist
-    sudo rm -f /Library/LaunchDaemons/com.bot.claude.plist
-fi
-
-# Build binary (shared across all instances)
-echo "Building bot..."
+# ── Build ──────────────────────────────────────────────────────────────────────
+echo "Building..."
 cd "$BOT_DIR" && go build -o bot .
 
-# Create LaunchAgent plist
-mkdir -p "$PLIST_DIR"
-cat > "$PLIST" << EOF
+# ── macOS ──────────────────────────────────────────────────────────────────────
+if [ "$OS" = "Darwin" ]; then
+    LABEL="com.bot.claude.$INSTANCE"
+    PLIST_DIR="$HOME/Library/LaunchAgents"
+    PLIST="$PLIST_DIR/$LABEL.plist"
+
+    # Remove old system daemon if present (backwards compat)
+    if sudo launchctl print system/com.bot.claude &>/dev/null 2>&1; then
+        echo "Removing old system daemon..."
+        sudo launchctl bootout system /Library/LaunchDaemons/com.bot.claude.plist
+        sudo rm -f /Library/LaunchDaemons/com.bot.claude.plist
+    fi
+
+    mkdir -p "$PLIST_DIR"
+    cat > "$PLIST" << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -63,18 +64,61 @@ cat > "$PLIST" << EOF
 </plist>
 EOF
 
-# Unload if already running
-launchctl unload "$PLIST" 2>/dev/null || true
+    launchctl unload "$PLIST" 2>/dev/null || true
+    launchctl load -w "$PLIST"
 
-# Load
-launchctl load -w "$PLIST"
+    echo ""
+    echo "Bot '$INSTANCE' installed and running."
+    echo "Config:  ~/.config/bot/$INSTANCE/config.yaml"
+    echo "Logs:    $BOT_DIR/bot.$INSTANCE.err"
+    echo ""
+    echo "Useful commands:"
+    echo "  launchctl unload $PLIST          # stop"
+    echo "  launchctl load -w $PLIST         # start"
+    echo "  launchctl kickstart gui/$(id -u)/$LABEL  # restart"
 
-echo ""
-echo "Bot '$INSTANCE' installed and running."
-echo "Config:  ~/.config/bot/$INSTANCE/config.yaml"
-echo "Logs:    $BOT_DIR/bot.$INSTANCE.err"
-echo ""
-echo "Useful commands:"
-echo "  launchctl unload $PLIST           # stop"
-echo "  launchctl load -w $PLIST          # start"
-echo "  launchctl kickstart gui/$(id -u)/$LABEL  # restart"
+# ── Linux (systemd) ────────────────────────────────────────────────────────────
+elif [ "$OS" = "Linux" ]; then
+    SERVICE="artoo-bot-$INSTANCE"
+    SYSTEMD_DIR="$HOME/.config/systemd/user"
+    SERVICE_FILE="$SYSTEMD_DIR/$SERVICE.service"
+
+    mkdir -p "$SYSTEMD_DIR"
+    cat > "$SERVICE_FILE" << EOF
+[Unit]
+Description=Artoo Bot ($INSTANCE)
+After=network.target
+
+[Service]
+ExecStart=$BOT_DIR/bot --instance $INSTANCE
+WorkingDirectory=$BOT_DIR
+Restart=always
+RestartSec=5
+Environment=HOME=$HOME
+Environment=PATH=$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin
+StandardOutput=append:$BOT_DIR/bot.$INSTANCE.log
+StandardError=append:$BOT_DIR/bot.$INSTANCE.err
+
+[Install]
+WantedBy=default.target
+EOF
+
+    systemctl --user daemon-reload
+    systemctl --user enable --now "$SERVICE"
+
+    echo ""
+    echo "Bot '$INSTANCE' installed and running."
+    echo "Config:  ~/.config/bot/$INSTANCE/config.yaml"
+    echo "Logs:    $BOT_DIR/bot.$INSTANCE.err"
+    echo ""
+    echo "Useful commands:"
+    echo "  systemctl --user stop $SERVICE      # stop"
+    echo "  systemctl --user start $SERVICE     # start"
+    echo "  systemctl --user restart $SERVICE   # restart"
+    echo "  journalctl --user -u $SERVICE -f    # follow logs"
+
+else
+    echo "Unsupported OS: $OS"
+    echo "Please set up the service manually. Binary is at: $BOT_DIR/bot"
+    exit 1
+fi

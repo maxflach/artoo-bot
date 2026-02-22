@@ -112,32 +112,21 @@ The wizard walks you through:
 
 Config is saved to `~/.config/bot/default/config.yaml`. The file is excluded from git — it contains your bot token.
 
-### Install as a background service (macOS)
+### Install as a background service
 
 ```bash
 bash install.sh
 ```
 
-This creates a LaunchAgent at `~/Library/LaunchAgents/com.bot.claude.default.plist` that starts the bot on login and restarts it if it crashes.
+Detects your OS and installs the appropriate service:
 
-**Linux (systemd):**
+- **macOS** — creates a LaunchAgent that starts on login and restarts on crash
+- **Linux** — creates a systemd user service with the same behaviour
 
-```ini
-# ~/.config/systemd/user/artoo-bot.service
-[Unit]
-Description=Artoo Bot
-
-[Service]
-ExecStart=/path/to/bot --instance default
-Restart=always
-WorkingDirectory=/path/to/artoo-bot
-
-[Install]
-WantedBy=default.target
-```
+For named instances:
 
 ```bash
-systemctl --user enable --now artoo-bot
+bash install.sh workbot
 ```
 
 ### Multiple instances

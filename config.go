@@ -30,6 +30,9 @@ type Config struct {
 	Memory struct {
 		MaxAgeDays int `yaml:"max_age_days"`
 	} `yaml:"memory"`
+	API struct {
+		Port int `yaml:"port"` // 0 = disabled
+	} `yaml:"api"`
 }
 
 // instance is the bot's name (e.g. "rex", "sara") set via --instance flag

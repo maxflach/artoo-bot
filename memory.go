@@ -110,6 +110,7 @@ func newMemoryStore() (*MemoryStore, error) {
 
 	ms := &MemoryStore{db: db}
 	ms.initUserStateTable()
+	ms.initAPIKeysTable()
 	return ms, nil
 }
 
@@ -414,6 +415,68 @@ func (m *MemoryStore) updateLastRun(id int64) {
 }
 
 // --- User state (active workspace persistence) ---
+
+// --- API keys ---
+
+func (m *MemoryStore) initAPIKeysTable() {
+	m.db.Exec(`CREATE TABLE IF NOT EXISTS api_keys (
+		id         INTEGER PRIMARY KEY AUTOINCREMENT,
+		name       TEXT NOT NULL,
+		key_hash   TEXT NOT NULL UNIQUE,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		last_used  DATETIME
+	)`)
+}
+
+func (m *MemoryStore) createAPIKey(name, keyHash string) (int64, error) {
+	res, err := m.db.Exec("INSERT INTO api_keys (name, key_hash) VALUES (?, ?)", name, keyHash)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+func (m *MemoryStore) lookupAPIKey(keyHash string) bool {
+	var id int64
+	m.db.QueryRow("SELECT id FROM api_keys WHERE key_hash = ?", keyHash).Scan(&id)
+	if id == 0 {
+		return false
+	}
+	m.db.Exec("UPDATE api_keys SET last_used = CURRENT_TIMESTAMP WHERE key_hash = ?", keyHash)
+	return true
+}
+
+func (m *MemoryStore) listAPIKeys() []struct {
+	ID       int64
+	Name     string
+	LastUsed string
+} {
+	rows, err := m.db.Query("SELECT id, name, COALESCE(last_used, '') FROM api_keys ORDER BY id")
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var keys []struct {
+		ID       int64
+		Name     string
+		LastUsed string
+	}
+	for rows.Next() {
+		var k struct {
+			ID       int64
+			Name     string
+			LastUsed string
+		}
+		rows.Scan(&k.ID, &k.Name, &k.LastUsed)
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+func (m *MemoryStore) revokeAPIKey(id int64) error {
+	_, err := m.db.Exec("DELETE FROM api_keys WHERE id = ?", id)
+	return err
+}
 
 func (m *MemoryStore) initUserStateTable() {
 	m.db.Exec(`CREATE TABLE IF NOT EXISTS user_state (

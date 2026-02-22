@@ -130,6 +130,8 @@ func (b *Bot) run() {
 	b.cron.start()
 	defer b.cron.stop()
 
+	b.startAPIServer()
+
 
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
@@ -311,6 +313,13 @@ func (b *Bot) handleCommand(chatID int64, sess *Session, text string) {
 			return
 		}
 		b.handleScheduleDelete(chatID, sess, args)
+
+	case "apikey", "apikeys":
+		if sess.userID != b.cfg.Telegram.AdminUserID {
+			b.reply(chatID, "Only the admin can manage API keys.")
+			return
+		}
+		b.handleAPIKey(chatID, cmd, args)
 
 	default:
 		b.reply(chatID, fmt.Sprintf("Unknown command: `/%s`\n\nType /help to see available commands.", cmd))
@@ -998,6 +1007,72 @@ func (b *Bot) handleCallback(cb *tgbotapi.CallbackQuery) {
 	if cb.Message != nil {
 		edit := tgbotapi.NewEditMessageReplyMarkup(adminID, cb.Message.MessageID, tgbotapi.InlineKeyboardMarkup{})
 		b.api.Request(edit)
+	}
+}
+
+func (b *Bot) handleAPIKey(chatID int64, cmd, args string) {
+	// /apikeys — list all keys
+	if cmd == "apikeys" || args == "" || args == "list" {
+		keys := b.mem.listAPIKeys()
+		if len(keys) == 0 {
+			b.reply(chatID, "No API keys. Use `/apikey new <name>` to create one.")
+			return
+		}
+		var lines []string
+		for _, k := range keys {
+			last := "never used"
+			if k.LastUsed != "" {
+				last = "last used " + k.LastUsed
+			}
+			lines = append(lines, fmt.Sprintf("• *%s* (ID: %d) — %s", k.Name, k.ID, last))
+		}
+		b.reply(chatID, "*API Keys:*\n"+strings.Join(lines, "\n")+"\n\n`/apikey revoke <id>` to remove a key.")
+		return
+	}
+
+	parts := strings.SplitN(args, " ", 2)
+	sub := parts[0]
+	rest := ""
+	if len(parts) > 1 {
+		rest = strings.TrimSpace(parts[1])
+	}
+
+	switch sub {
+	case "new", "create":
+		name := rest
+		if name == "" {
+			b.reply(chatID, "Usage: `/apikey new <name>`")
+			return
+		}
+		raw, hash, err := generateAPIKey()
+		if err != nil {
+			b.reply(chatID, fmt.Sprintf("Failed to generate key: %v", err))
+			return
+		}
+		id, err := b.mem.createAPIKey(name, hash)
+		if err != nil {
+			b.reply(chatID, fmt.Sprintf("Failed to save key: %v", err))
+			return
+		}
+		b.reply(chatID, fmt.Sprintf(
+			"*API key created* (ID: %d)\nName: %s\n\n`%s`\n\n⚠️ Copy this now — it won't be shown again.",
+			id, name, raw))
+
+	case "revoke", "delete", "remove":
+		var id int64
+		fmt.Sscanf(rest, "%d", &id)
+		if id == 0 {
+			b.reply(chatID, "Usage: `/apikey revoke <id>`")
+			return
+		}
+		if err := b.mem.revokeAPIKey(id); err != nil {
+			b.reply(chatID, fmt.Sprintf("Failed: %v", err))
+			return
+		}
+		b.reply(chatID, fmt.Sprintf("API key %d revoked ✓", id))
+
+	default:
+		b.reply(chatID, "Usage:\n`/apikey new <name>` — create a key\n`/apikeys` — list keys\n`/apikey revoke <id>` — revoke a key")
 	}
 }
 

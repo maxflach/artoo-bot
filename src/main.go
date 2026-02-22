@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -41,6 +42,8 @@ type Bot struct {
 	cron       *CronRunner
 	sessionsMu sync.RWMutex
 	sessions   map[int64]*Session
+	skillsMu   sync.RWMutex
+	skills     map[string]*Skill
 }
 
 func newBot(cfg *Config) (*Bot, error) {
@@ -82,6 +85,7 @@ func newBot(cfg *Config) (*Bot, error) {
 		sessions:   sessions,
 	}
 	b.cron = newCronRunner(b)
+	b.skills = loadSkills(skillPaths(""))
 	return b, nil
 }
 
@@ -321,7 +325,17 @@ func (b *Bot) handleCommand(chatID int64, sess *Session, text string) {
 		}
 		b.handleAPIKey(chatID, cmd, args)
 
+	case "skills":
+		b.handleSkillsCommand(chatID, sess, args)
+
 	default:
+		b.skillsMu.RLock()
+		skill, isSkill := b.skills[cmd]
+		b.skillsMu.RUnlock()
+		if isSkill {
+			go b.runSkill(chatID, sess, skill, args)
+			return
+		}
 		b.reply(chatID, fmt.Sprintf("Unknown command: `/%s`\n\nType /help to see available commands.", cmd))
 	}
 }
@@ -872,6 +886,21 @@ func (b *Bot) runClaude(userID int64, prompt, workspace, workingDir, model strin
 		systemPrompt += "\n\n" + mem
 	}
 
+	b.skillsMu.RLock()
+	if len(b.skills) > 0 {
+		var skillLines []string
+		for name, s := range b.skills {
+			desc := s.Description
+			if desc == "" {
+				desc = s.Type
+			}
+			skillLines = append(skillLines, fmt.Sprintf("- /%s: %s", name, desc))
+		}
+		sort.Strings(skillLines)
+		systemPrompt += "\n\n## Available Skills\nThe following custom /commands are available:\n" + strings.Join(skillLines, "\n")
+	}
+	b.skillsMu.RUnlock()
+
 	if len(history) > 0 {
 		systemPrompt += "\n\n## Recent conversation\n"
 		for _, m := range history {
@@ -1076,6 +1105,79 @@ func (b *Bot) handleAPIKey(chatID int64, cmd, args string) {
 	}
 }
 
+// runSkill dispatches a skill command for a user.
+func (b *Bot) runSkill(chatID int64, sess *Session, skill *Skill, args string) {
+	sess.mu.Lock()
+	userID := sess.userID
+	ws := sess.workspace
+	wd := sess.workingDir
+	model := b.activeModelForSession(sess)
+	hist := make([]Message, len(sess.history))
+	copy(hist, sess.history)
+	sess.mu.Unlock()
+
+	b.reply(chatID, "_"+nextAck()+"_")
+
+	runFn := func(prompt string) (string, error) {
+		return b.runClaude(userID, prompt, ws, wd, model, hist)
+	}
+	result, err := b.dispatchSkill(skill, args, runFn)
+	if err != nil {
+		b.reply(chatID, fmt.Sprintf("Skill error: %v", err))
+		return
+	}
+	for _, chunk := range splitMessage(result, maxMsgLen) {
+		b.reply(chatID, chunk)
+	}
+}
+
+// handleSkillsCommand handles /skills and /skills reload.
+func (b *Bot) handleSkillsCommand(chatID int64, sess *Session, args string) {
+	if args == "reload" {
+		if sess.userID != b.cfg.Telegram.AdminUserID {
+			b.reply(chatID, "Only the admin can reload skills.")
+			return
+		}
+		sess.mu.Lock()
+		wd := sess.workingDir
+		sess.mu.Unlock()
+		loaded := loadSkills(skillPaths(wd))
+		b.skillsMu.Lock()
+		b.skills = loaded
+		b.skillsMu.Unlock()
+		names := make([]string, 0, len(loaded))
+		for name := range loaded {
+			names = append(names, "/"+name)
+		}
+		sort.Strings(names)
+		b.reply(chatID, fmt.Sprintf("Loaded %d skill(s): %s", len(names), strings.Join(names, ", ")))
+		return
+	}
+
+	b.skillsMu.RLock()
+	skills := make([]*Skill, 0, len(b.skills))
+	for _, s := range b.skills {
+		skills = append(skills, s)
+	}
+	b.skillsMu.RUnlock()
+
+	if len(skills) == 0 {
+		b.reply(chatID, "No skills loaded.\n\nDrop `.md` or executable files into a `skills/` directory:\n• `~/.config/bot/skills/` — global\n• `~/.config/bot/<instance>/skills/` — per-instance\n• `<project>/skills/` — per-project")
+		return
+	}
+
+	sort.Slice(skills, func(i, j int) bool { return skills[i].Name < skills[j].Name })
+	var lines []string
+	for _, s := range skills {
+		desc := s.Description
+		if desc == "" {
+			desc = s.Type
+		}
+		lines = append(lines, fmt.Sprintf("• `/%s` — %s", s.Name, desc))
+	}
+	b.reply(chatID, "*Skills:*\n"+strings.Join(lines, "\n"))
+}
+
 func (b *Bot) reply(chatID int64, text string) {
 	msg := tgbotapi.NewMessage(chatID, text)
 	msg.ParseMode = "Markdown"
@@ -1114,6 +1216,9 @@ func (b *Bot) helpText() string {
 			"/schedule <name> | <cron> | <prompt> — recurring scheduled task\n"+
 			"/schedules — list your scheduled tasks\n"+
 			"/unschedule <id> — remove a scheduled task\n\n"+
+			"*Skills*\n"+
+			"/skills — list loaded custom commands\n"+
+			"/skills reload — reload skills from disk (admin)\n\n"+
 			"*Examples*\n"+
 			"_what's in my downloads folder?_\n"+
 			"_summarize recent git commits in ~/code/myproject_\n"+

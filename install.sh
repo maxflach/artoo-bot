@@ -16,6 +16,50 @@ echo "Installing bot instance: $INSTANCE"
 echo "Building..."
 cd "$BOT_DIR/src" && go build -o "$BOT_DIR/bot" .
 
+# ── Skills ─────────────────────────────────────────────────────────────────────
+SKILLS_DIR="$HOME/.config/bot/skills/dadjoke"
+if [ ! -d "$SKILLS_DIR" ]; then
+    echo "Installing dadjoke demo skill..."
+    mkdir -p "$SKILLS_DIR"
+    cat > "$SKILLS_DIR/run.sh" << 'RUNSH'
+#!/bin/bash
+# Tell a random dad joke
+DIR="$(cd "$(dirname "$0")" && pwd)"
+python3 -c "
+import json, random
+with open('$DIR/jokes.json') as f:
+    jokes = json.load(f)
+print(random.choice(jokes))
+"
+RUNSH
+    chmod +x "$SKILLS_DIR/run.sh"
+    cat > "$SKILLS_DIR/jokes.json" << 'JOKES'
+[
+  "Why don't scientists trust atoms? Because they make up everything!",
+  "I told my wife she was drawing her eyebrows too high. She looked surprised.",
+  "What do you call a fake noodle? An impasta.",
+  "Why did the scarecrow win an award? Because he was outstanding in his field.",
+  "I'm reading a book about anti-gravity. It's impossible to put down.",
+  "Did you hear about the mathematician who's afraid of negative numbers? He'll stop at nothing to avoid them.",
+  "Why can't you give Elsa a balloon? Because she'll let it go.",
+  "I would tell you a construction joke, but I'm still working on it.",
+  "What do you call cheese that isn't yours? Nacho cheese.",
+  "Why did the bicycle fall over? Because it was two-tired.",
+  "I used to hate facial hair, but then it grew on me.",
+  "What do you call a sleeping dinosaur? A dino-snore.",
+  "Why don't eggs tell jokes? They'd crack each other up.",
+  "What do you call a factory that makes okay products? A satisfactory.",
+  "Did you hear about the restaurant on the moon? Great food, no atmosphere.",
+  "Why did the math book look so sad? Because it had too many problems.",
+  "What do you call a bear with no teeth? A gummy bear.",
+  "I only know 25 letters of the alphabet. I don't know y.",
+  "Why did the golfer bring an extra pair of pants? In case he got a hole in one.",
+  "What do you call a group of cows playing instruments? A moo-sical band."
+]
+JOKES
+    echo "Demo skill installed: /dadjoke"
+fi
+
 # ── macOS ──────────────────────────────────────────────────────────────────────
 if [ "$OS" = "Darwin" ]; then
     LABEL="com.bot.claude.$INSTANCE"

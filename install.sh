@@ -14,7 +14,7 @@ echo "Installing bot instance: $INSTANCE"
 
 # ── Build ──────────────────────────────────────────────────────────────────────
 echo "Building..."
-cd "$BOT_DIR" && go build -o bot .
+cd "$BOT_DIR/src" && go build -o "$BOT_DIR/bot" .
 
 # ── macOS ──────────────────────────────────────────────────────────────────────
 if [ "$OS" = "Darwin" ]; then

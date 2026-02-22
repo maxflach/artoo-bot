@@ -612,16 +612,27 @@ func (m *MemoryStore) setSecret(userID int64, scope, name, encValue, allowedSkil
 	return err
 }
 
+// SystemUserID is the sentinel user_id for system-wide secrets set by the admin.
+// These are shared across all users and act as the lowest-priority fallback.
+const SystemUserID int64 = 0
+
 // getSecretsForSkill returns encrypted secret values available to a specific skill.
-// Merges scope="*" (global) and projectScope, with project overriding global.
-// Only secrets whose allowed_skill matches skillName are returned.
-func (m *MemoryStore) getSecretsForSkill(userID int64, globalScope, projectScope, skillName string) (map[string]string, error) {
-	scopes := []interface{}{userID, globalScope, projectScope, skillName}
+// Merges in priority order (lowest to highest, later values win):
+//  1. System global  (user_id=0, scope="*")
+//  2. User global    (user_id=X, scope="*")
+//  3. User project   (user_id=X, scope=projectScope)
+func (m *MemoryStore) getSecretsForSkill(userID int64, projectScope, skillName string) (map[string]string, error) {
 	rows, err := m.db.Query(
-		`SELECT scope, name, value_enc FROM secrets
-		 WHERE user_id = ? AND scope IN (?, ?) AND allowed_skill = ?
-		 ORDER BY scope ASC`,
-		scopes...,
+		`SELECT user_id, scope, name, value_enc FROM secrets
+		 WHERE allowed_skill = ?
+		   AND (
+		         (user_id = 0   AND scope = '*')
+		      OR (user_id = ?   AND scope IN ('*', ?))
+		   )
+		 ORDER BY
+		   CASE WHEN user_id = 0 THEN 0 ELSE 1 END ASC,
+		   CASE WHEN scope = '*' THEN 0 ELSE 1 END ASC`,
+		skillName, userID, projectScope,
 	)
 	if err != nil {
 		return nil, err
@@ -630,11 +641,12 @@ func (m *MemoryStore) getSecretsForSkill(userID int64, globalScope, projectScope
 
 	result := make(map[string]string)
 	for rows.Next() {
+		var uid int64
 		var scope, name, encValue string
-		if err := rows.Scan(&scope, &name, &encValue); err != nil {
+		if err := rows.Scan(&uid, &scope, &name, &encValue); err != nil {
 			continue
 		}
-		result[name] = encValue // later rows (project scope) override earlier (global)
+		result[name] = encValue
 	}
 	return result, nil
 }
@@ -645,14 +657,28 @@ type secretEntry struct {
 	AllowedSkill string
 }
 
-// listSecrets returns secret names (never values) visible in the given scopes.
-func (m *MemoryStore) listSecrets(userID int64, projectScope string) ([]secretEntry, error) {
-	rows, err := m.db.Query(
-		`SELECT name, scope, allowed_skill FROM secrets
-		 WHERE user_id = ? AND scope IN ('*', ?)
-		 ORDER BY scope ASC, name ASC`,
-		userID, projectScope,
-	)
+// listSecrets returns secret names (never values) for a user's scopes.
+// If includeSystem is true, also includes system secrets (user_id=0).
+func (m *MemoryStore) listSecrets(userID int64, projectScope string, includeSystem bool) ([]secretEntry, error) {
+	var rows *sql.Rows
+	var err error
+	if includeSystem {
+		rows, err = m.db.Query(
+			`SELECT name, scope, allowed_skill,
+			        CASE WHEN user_id = 0 THEN 1 ELSE 0 END as is_system
+			 FROM secrets
+			 WHERE (user_id = ? AND scope IN ('*', ?)) OR (user_id = 0 AND scope = '*')
+			 ORDER BY is_system DESC, scope ASC, name ASC`,
+			userID, projectScope,
+		)
+	} else {
+		rows, err = m.db.Query(
+			`SELECT name, scope, allowed_skill, 0 as is_system FROM secrets
+			 WHERE user_id = ? AND scope IN ('*', ?)
+			 ORDER BY scope ASC, name ASC`,
+			userID, projectScope,
+		)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -661,8 +687,12 @@ func (m *MemoryStore) listSecrets(userID int64, projectScope string) ([]secretEn
 	var entries []secretEntry
 	for rows.Next() {
 		var e secretEntry
-		if err := rows.Scan(&e.Name, &e.Scope, &e.AllowedSkill); err != nil {
+		var isSystem int
+		if err := rows.Scan(&e.Name, &e.Scope, &e.AllowedSkill, &isSystem); err != nil {
 			continue
+		}
+		if isSystem == 1 {
+			e.Scope = "system"
 		}
 		entries = append(entries, e)
 	}

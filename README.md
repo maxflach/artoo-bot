@@ -204,11 +204,13 @@ Send any plain text message — it goes straight to your configured agentic CLI,
 | `/unschedule <id>` | Remove a scheduled task |
 | `/skills` | List loaded custom skill commands |
 | `/skills reload` | Reload skills from disk without restarting _(admin only)_ |
-| `/secret set <name> <value> --skill <skill>` | Store a credential, locked to a specific skill |
-| `/secret set --global <name> <value> --skill <skill>` | Store a credential available in all projects |
+| `/secret set <name> <value> --skill <skill>` | Store a credential for the current project |
+| `/secret set --global <name> <value> --skill <skill>` | Store a credential for all your projects |
+| `/secret set --system <name> <value> --skill <skill>` | Store a credential for all users _(admin only)_ |
 | `/secret list` | Show stored secret names (values never shown) |
 | `/secret del <name>` | Delete a secret from the current project |
-| `/secret del --global <name>` | Delete a global secret |
+| `/secret del --global <name>` | Delete from your global scope |
+| `/secret del --system <name>` | Delete a system secret _(admin only)_ |
 | `/new` | Fresh start — clear history and reset to global |
 | `/clear` | Clear conversation history only |
 | `/help` | Show all commands |
@@ -335,16 +337,21 @@ Secrets are scoped to your current project by default, or globally across all pr
 
 | Command | Where it's available |
 |---|---|
-| `/secret set KEY val --skill foo` | Current project only |
+| `/secret set KEY val --skill foo` | Your current project only |
 | `/secret set --global KEY val --skill foo` | All your projects |
+| `/secret set --system KEY val --skill foo` | All users on this bot _(admin only)_ |
 
-When a skill runs, it receives secrets from both scopes merged together. If the same key exists in both, the project-level value wins (useful for overriding a global default in one specific project).
+When a skill runs, it receives secrets from all applicable scopes merged together, with more specific values overriding less specific ones:
 
 ```
-Global scope (*):    GEMINI_KEY = xxxxxxx   ← available in all your projects
-Project "research":  GEMINI_KEY = yyyyyyy   ← overrides global in this project only
-Project "finance":   (none)                 ← falls back to your global GEMINI_KEY
+System secret:           GEMINI_KEY = xxxxxxx   ← admin-provisioned, all users
+Your global secret:      GEMINI_KEY = yyyyyyy   ← overrides system for you only
+Your project "research": GEMINI_KEY = zzzzzzz   ← overrides all of the above
+Your project "finance":  (none)                 ← uses your global GEMINI_KEY
+Another user:            (none)                 ← uses the system GEMINI_KEY
 ```
+
+System secrets are useful when you want to provision a shared API key for all users without each person having to set their own. Any user can override a system secret with their own value — they'll never see or access yours.
 
 #### Encryption
 

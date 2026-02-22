@@ -1134,7 +1134,7 @@ func (b *Bot) runSkill(chatID int64, sess *Session, skill *Skill, args string) {
 
 	// Build extraEnv: ARTOO_WD + secrets scoped to this skill
 	extraEnv := map[string]string{"ARTOO_WD": wd}
-	encSecrets, err := b.mem.getSecretsForSkill(userID, "*", ws, skill.Name)
+	encSecrets, err := b.mem.getSecretsForSkill(userID, ws, skill.Name)
 	if err == nil {
 		for name, encVal := range encSecrets {
 			plain, err := decryptSecret(b.secretKey, encVal)
@@ -1168,12 +1168,15 @@ func (b *Bot) runSkill(chatID int64, sess *Session, skill *Skill, args string) {
 
 // handleSecretCommand handles /secret set|list|del subcommands.
 func (b *Bot) handleSecretCommand(chatID int64, sess *Session, args string) {
+	isAdmin := sess.userID == b.cfg.Telegram.AdminUserID
 	usage := "Usage:\n" +
 		"`/secret set <name> <value> --skill <skill>` — store for current project\n" +
-		"`/secret set --global <name> <value> --skill <skill>` — store for all projects\n" +
+		"`/secret set --global <name> <value> --skill <skill>` — store for all your projects\n" +
+		"`/secret set --system <name> <value> --skill <skill>` — store for all users _(admin only)_\n" +
 		"`/secret list` — show key names in current project + global\n" +
 		"`/secret del <name>` — delete from current project\n" +
-		"`/secret del --global <name>` — delete from global scope"
+		"`/secret del --global <name>` — delete from your global scope\n" +
+		"`/secret del --system <name>` — delete system secret _(admin only)_"
 
 	if args == "" {
 		b.reply(chatID, usage)
@@ -1193,9 +1196,13 @@ func (b *Bot) handleSecretCommand(chatID int64, sess *Session, args string) {
 
 	switch sub {
 	case "set":
-		global, skillName, positional := parseSecretFlags(rest)
+		global, system, skillName, positional := parseSecretFlags(rest)
+		if system && !isAdmin {
+			b.reply(chatID, "Only the admin can set system secrets.")
+			return
+		}
 		if len(positional) < 2 {
-			b.reply(chatID, "Usage: `/secret set [--global] <name> <value> --skill <skill>`")
+			b.reply(chatID, "Usage: `/secret set [--global|--system] <name> <value> --skill <skill>`")
 			return
 		}
 		if skillName == "" {
@@ -1204,27 +1211,37 @@ func (b *Bot) handleSecretCommand(chatID int64, sess *Session, args string) {
 		}
 		name := positional[0]
 		value := positional[1]
+
+		targetUserID := sess.userID
 		scope := ws
-		if global {
+		scopeLabel := fmt.Sprintf("project *%s*", scope)
+		if system {
+			targetUserID = SystemUserID
 			scope = "*"
+			scopeLabel = "all users (system)"
+		} else if global {
+			scope = "*"
+			scopeLabel = "all your projects (global)"
 		}
+
 		encVal, err := encryptSecret(b.secretKey, value)
 		if err != nil {
 			b.reply(chatID, fmt.Sprintf("Encryption error: %v", err))
 			return
 		}
-		if err := b.mem.setSecret(sess.userID, scope, name, encVal, skillName); err != nil {
+		if err := b.mem.setSecret(targetUserID, scope, name, encVal, skillName); err != nil {
 			b.reply(chatID, fmt.Sprintf("Failed to save secret: %v", err))
 			return
-		}
-		scopeLabel := fmt.Sprintf("project *%s*", scope)
-		if scope == "*" {
-			scopeLabel = "all projects (global)"
 		}
 		b.reply(chatID, fmt.Sprintf("Secret `%s` saved for %s, skill: `%s` ✓", name, scopeLabel, skillName))
 
 	case "list":
-		entries, err := b.mem.listSecrets(sess.userID, ws)
+		_, system, _, _ := parseSecretFlags(rest)
+		if system && !isAdmin {
+			b.reply(chatID, "Only the admin can list system secrets.")
+			return
+		}
+		entries, err := b.mem.listSecrets(sess.userID, ws, system || isAdmin)
 		if err != nil || len(entries) == 0 {
 			b.reply(chatID, "No secrets stored for this project.")
 			return
@@ -1232,25 +1249,36 @@ func (b *Bot) handleSecretCommand(chatID int64, sess *Session, args string) {
 		var lines []string
 		for _, e := range entries {
 			scopeLabel := fmt.Sprintf("project: %s", e.Scope)
-			if e.Scope == "*" {
+			switch e.Scope {
+			case "*":
 				scopeLabel = "global"
+			case "system":
+				scopeLabel = "system (all users)"
 			}
 			lines = append(lines, fmt.Sprintf("• `%s` — skill: `%s` (%s)", e.Name, e.AllowedSkill, scopeLabel))
 		}
 		b.reply(chatID, "*Secrets:*\n"+strings.Join(lines, "\n"))
 
 	case "del", "delete", "rm":
-		global, _, positional := parseSecretFlags(rest)
+		global, system, _, positional := parseSecretFlags(rest)
+		if system && !isAdmin {
+			b.reply(chatID, "Only the admin can delete system secrets.")
+			return
+		}
 		if len(positional) == 0 {
-			b.reply(chatID, "Usage: `/secret del [--global] <name>`")
+			b.reply(chatID, "Usage: `/secret del [--global|--system] <name>`")
 			return
 		}
 		name := positional[0]
+		targetUserID := sess.userID
 		scope := ws
-		if global {
+		if system {
+			targetUserID = SystemUserID
+			scope = "*"
+		} else if global {
 			scope = "*"
 		}
-		if err := b.mem.deleteSecret(sess.userID, scope, name); err != nil {
+		if err := b.mem.deleteSecret(targetUserID, scope, name); err != nil {
 			b.reply(chatID, fmt.Sprintf("Failed: %v", err))
 			return
 		}
@@ -1261,15 +1289,18 @@ func (b *Bot) handleSecretCommand(chatID int64, sess *Session, args string) {
 	}
 }
 
-// parseSecretFlags parses --global and --skill flags from a secret subcommand args string.
-// Returns (isGlobal, skillName, positionalArgs).
-func parseSecretFlags(args string) (global bool, skillName string, positional []string) {
+// parseSecretFlags parses --global, --system, and --skill flags from secret subcommand args.
+// Returns (isGlobal, isSystem, skillName, positionalArgs).
+func parseSecretFlags(args string) (global, system bool, skillName string, positional []string) {
 	fields := strings.Fields(args)
 	i := 0
 	for i < len(fields) {
 		switch fields[i] {
 		case "--global":
 			global = true
+			i++
+		case "--system":
+			system = true
 			i++
 		case "--skill":
 			if i+1 < len(fields) {

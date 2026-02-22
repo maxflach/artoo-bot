@@ -14,7 +14,7 @@ What I wanted was the opposite: let the tool — Claude Code, OpenCode, or simil
 
 The mental model I was going for is closer to Claude's own "computer use" or the spirit of claude.ai's Projects — but accessible via Telegram, running on my hardware, with my files available.
 
-My main use case is **async research**. I fire off a task — "monitor the sync licensing industry and send me a PDF digest of what's new" — and let it run. The result arrives when it's done, not when a 30-second API timeout kicks in. That changes how you use it.
+My main use case is **async research**. I fire off a task — "search for the latest news on this topic and send me a summary when you're done" — and let it run. The result arrives when it's done, not when a 30-second API timeout kicks in. That changes how you use it.
 
 A few other things that mattered to me:
 

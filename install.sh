@@ -94,7 +94,7 @@ key = os.environ['ARTOO_SECRET_GEMINI_API_KEY']
 prompt = """$PROMPT"""
 output = "$OUTPUT"
 
-url = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-011:predict?key={key}"
+url = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict?key={key}"
 body = json.dumps({"instances": [{"prompt": prompt}], "parameters": {"sampleCount": 1}})
 req = urllib.request.Request(url, body.encode(), {"Content-Type": "application/json"})
 try:

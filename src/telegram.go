@@ -338,12 +338,32 @@ func (t *TelegramTransport) handleFileUpload(chatID string, sess *Session, doc *
 		return
 	}
 
+	ext := strings.ToLower(filepath.Ext(doc.FileName))
 	mdName := strings.TrimSuffix(doc.FileName, filepath.Ext(doc.FileName)) + ".md"
-	prompt := fmt.Sprintf(
-		`I've saved a file called "%s" to this workspace.
-Read it and create a markdown summary file called "%s" that captures the key information, facts, and context from it.
-Structure it clearly with headings. This file will serve as project memory/context.`,
-		doc.FileName, mdName)
+
+	var extractHint string
+	switch ext {
+	case ".pdf":
+		extractHint = fmt.Sprintf("Use pdftotext to extract text: run `pdftotext \"%s\" -` (prints to stdout). If unavailable, try `pandoc \"%s\" -t plain`.", doc.FileName, doc.FileName)
+	case ".docx", ".doc":
+		extractHint = fmt.Sprintf("Use pandoc: run `pandoc \"%s\" -t plain`.", doc.FileName)
+	case ".xlsx", ".xls":
+		extractHint = fmt.Sprintf("Use python3 with openpyxl or ssconvert to read \"%s\" as text.", doc.FileName)
+	default:
+		extractHint = fmt.Sprintf("Read \"%s\" directly as plain text.", doc.FileName)
+	}
+
+	prompt := fmt.Sprintf(`A file called "%s" has been saved to this workspace.
+
+%s
+
+Create a well-structured markdown file called "%s":
+- # Heading: document title or filename
+- ## Sections organised by topic
+- Preserve all facts, numbers, dates, names, and data — be comprehensive
+- Use tables for tabular data
+- Write the file directly to disk.`,
+		doc.FileName, extractHint, mdName)
 
 	_, localChatID := splitChatID(chatID)
 	stopTyping := make(chan struct{})
@@ -359,7 +379,7 @@ Structure it clearly with headings. This file will serve as project memory/conte
 		}
 	}()
 
-	response, err := b.runClaude(sess.userID, prompt, ws, wd, model, nil)
+	_, err = b.runClaude(sess.userID, prompt, ws, wd, model, nil)
 	close(stopTyping)
 	if err != nil {
 		b.reply(chatID, fmt.Sprintf("File saved but extraction failed: %v", err))
@@ -367,7 +387,21 @@ Structure it clearly with headings. This file will serve as project memory/conte
 	}
 
 	b.mem.recordFile(sess.userID, ws, doc.FileName, destPath, int64(doc.FileSize))
-	b.reply(chatID, fmt.Sprintf("*%s* added to project ✓\n\n%s", doc.FileName, response))
+
+	// Populate memories from the extracted markdown.
+	mdPath := filepath.Join(wd, mdName)
+	if mdContent, readErr := os.ReadFile(mdPath); readErr == nil {
+		go b.mem.extractAndSave(
+			sess.userID, ws,
+			fmt.Sprintf("File uploaded: %s", doc.FileName),
+			string(mdContent),
+			func(p string) (string, error) {
+				return b.runClaude(sess.userID, p, ws, wd, b.cfg.Backend.ExtractModel, nil)
+			},
+		)
+	}
+
+	b.reply(chatID, fmt.Sprintf("*%s* extracted to `%s` ✓", doc.FileName, mdName))
 }
 
 // handleProjectSetupCallback processes button answers for interactive project creation.

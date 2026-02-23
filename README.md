@@ -234,6 +234,8 @@ Send any plain text message — it goes straight to your configured agentic CLI,
 | `/project <name> \| <description>` | Create a new project — walks through 3 setup questions (research type, auto PDF, agent style) then generates a README |
 | `/project update` | Button menu — Improve README / Change agent style / View schedules |
 | `/project update <instruction>` | Update the current README with a specific instruction |
+| `/project share` | Button wizard — share a project with another approved user |
+| `/project shares` | List your shares (with revoke buttons) and shares others have granted you |
 | `/memory` | Show recent memories for the current project |
 | `/remember <fact>` | Save a fact to the current project memory |
 | `/remember --global <fact>` | Save to global memory (shared across all projects) |
@@ -272,6 +274,7 @@ Projects are the core concept. Each project gets:
 - Its own memory (extracted automatically after each conversation)
 - Its own file history
 - Its own schedules
+- Optional sharing with other approved users (read or read & write access)
 
 ```
 /project research | Track industry news and produce weekly PDF digests
@@ -283,6 +286,47 @@ Creating a project with a description triggers a 3-step setup:
 3. **Agent style?** — choose how the AI approaches work in this project: General, Researcher, Engineer, Analyst, or Writer. The chosen style is written into the README as an `## Agent` section.
 
 From then on, every message in that project context includes the README (with agent style) as instructions. Change the style anytime via `/project update` → *Change agent style*.
+
+### Project sharing
+
+Projects can be shared with other approved bot users. The grantee works directly in the owner's project directory and sees the same README, files, and project memories.
+
+**Share a project** via the button wizard:
+
+```
+/project share
+```
+
+Three steps:
+1. **Pick project** — choose one of your own projects
+2. **Pick user** — choose from other approved users
+3. **Pick access level** — *Read* or *Read & Write*
+
+The grantee gets a notification and the project appears in their `/project` list as `@owner/project`.
+
+**Access levels:**
+
+| Level | Can do |
+|---|---|
+| Read | Work in the project, see README and memories |
+| Read & Write | Everything above, plus `/project update` to modify the README |
+
+**List and revoke shares:**
+
+```
+/project shares
+```
+
+Shows two sections — projects you've shared (with **Revoke** buttons) and projects shared with you. Revoking notifies the grantee immediately.
+
+**Switching to a shared project:**
+
+```
+/project          → tap @owner/project in the list
+/project @alice/research  → switch directly by name
+```
+
+Memory is loaded from the owner's project context. New memories written during the session go to the owner's project (write access) or your own scope (read access).
 
 ### Scheduling
 
@@ -464,6 +508,7 @@ backend:
   working_dir: "~/bot-workspace/default"
   default_model: "claude-sonnet-4-6"
   extract_model: "claude-haiku-4-5"  # cheaper model for background memory extraction
+  repl: true                 # session-resume mode (claude-code only, see below)
 
 persona:
   name: "Artoo"
@@ -662,6 +707,14 @@ The Go process is intentionally thin. It handles:
 
 Everything else — web search, file manipulation, code execution, PDF generation — is delegated to the configured CLI tool. The system prompt includes the persona, working directory rules, the project README, relevant memories, and recent conversation history.
 
+### Session-resume mode
+
+When `backend.repl: true` (claude-code only), the bot uses Claude Code's native session persistence for multi-turn context. The first message in a conversation creates a session (`--session-id`); follow-up messages resume it (`--resume`). This means the CLI manages conversation history natively instead of the bot re-pasting it into the system prompt on every turn.
+
+If a resume fails for any reason, the bot falls back to the default fire-and-wait mode automatically. Context-changing commands (`/new`, `/clear`, `/model`, `/project`) reset the session so the next message starts fresh.
+
+Set `repl: false` (default) to use the original fire-and-wait mode where each message spawns an independent process with history included in the system prompt.
+
 ---
 
 ## Roadmap
@@ -673,6 +726,8 @@ Everything else — web search, file manipulation, code execution, PDF generatio
 - [x] Multi-transport — Telegram, Discord, web chat
 - [x] Docker support — `Dockerfile` + `docker-compose.yml` with Claude Code, pdf tools, and python pre-installed
 - [x] Allowed external paths — admin-provisioned access to directories outside the user sandbox
+- [x] Session-resume mode — native multi-turn context via Claude Code's `--session-id` / `--resume`
+- [x] Project sharing — share projects with other approved users with read or read & write access
 - [ ] Voice message support
 - [ ] Multi-modal file handling (images, audio)
 

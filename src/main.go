@@ -28,9 +28,9 @@ type Session struct {
 	chatID     string // transport-prefixed, e.g. "tg:123456789"
 	workingDir string
 	workspace  string
-	model      string // session-level model override; "" means use workspace or default
-	proc       *ClaudeProcess
-	history    []Message
+	model            string // session-level model override; "" means use workspace or default
+	claudeSessionID  string // Claude session UUID for multi-turn; "" means fresh
+	history          []Message
 }
 
 // ProjectOptions captures answers from the interactive new-project setup flow.
@@ -269,12 +269,6 @@ func (b *Bot) chatIDForUser(userID int64) string {
 func (b *Bot) run() {
 	b.cron.start()
 	defer b.cron.stop()
-	defer b.killAllProcesses()
-
-	if b.cfg.Backend.REPL {
-		go b.reapIdleProcesses()
-	}
-
 	b.startAPIServer()
 
 	var wg sync.WaitGroup
@@ -337,7 +331,7 @@ func (b *Bot) handleCommand(chatID string, sess *Session, text string) {
 		b.reply(chatID, b.helpText())
 
 	case "new":
-		sess.killProc()
+		sess.resetSession()
 		sess.mu.Lock()
 		sess.history = nil
 		sess.workspace = "global"
@@ -349,7 +343,7 @@ func (b *Bot) handleCommand(chatID string, sess *Session, text string) {
 		b.reply(chatID, "Session reset. Fresh start.")
 
 	case "clear":
-		sess.killProc()
+		sess.resetSession()
 		sess.mu.Lock()
 		sess.history = nil
 		sess.mu.Unlock()
@@ -655,7 +649,7 @@ func (b *Bot) handleWorkspace(chatID string, sess *Session, args string) {
 			b.reply(chatID, fmt.Sprintf("External directory not accessible: %v", err))
 			return
 		}
-		sess.killProc()
+		sess.resetSession()
 		sess.mu.Lock()
 		sess.workspace = ap.Alias
 		sess.workingDir = ap.Path
@@ -688,7 +682,7 @@ func (b *Bot) handleWorkspace(chatID string, sess *Session, args string) {
 		return
 	}
 
-	sess.killProc()
+	sess.resetSession()
 	sess.mu.Lock()
 	sess.workspace = name
 	sess.workingDir = wsDir
@@ -1074,7 +1068,7 @@ func (b *Bot) runUserMessage(chatID string, sess *Session, text string) {
 	var err error
 
 	if b.cfg.Backend.REPL && b.cfg.Backend.Type != "opencode" {
-		response, err = b.runClaudeREPL(sess, text)
+		response, err = b.runClaudeSession(sess, text)
 		if err != nil {
 			log.Printf("repl: failed, falling back to fire-and-wait: %v", err)
 			response, err = b.runClaude(sess.userID, text, ws, wd, model, hist)
@@ -1322,7 +1316,7 @@ func (b *Bot) handleModelSwitch(chatID string, sess *Session, arg string) {
 	modelName := parts[0]
 	save := len(parts) > 1 && parts[1] == "--save"
 
-	sess.killProc()
+	sess.resetSession()
 	sess.mu.Lock()
 	sess.model = modelName
 	ws := sess.workspace

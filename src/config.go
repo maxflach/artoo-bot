@@ -35,6 +35,7 @@ type Config struct {
 		WorkingDir   string `yaml:"working_dir"`   // base working dir for all users
 		DefaultModel string `yaml:"default_model"` // default model name
 		ExtractModel string `yaml:"extract_model"` // model used for memory extraction (optional)
+		REPL         bool   `yaml:"repl"`          // true = persistent REPL subprocess; false = fire-and-wait (claude-code only)
 	} `yaml:"backend"`
 	Persona struct {
 		Name         string `yaml:"name"`

@@ -29,6 +29,7 @@ type Session struct {
 	workingDir string
 	workspace  string
 	model      string // session-level model override; "" means use workspace or default
+	proc       *ClaudeProcess
 	history    []Message
 }
 
@@ -268,6 +269,11 @@ func (b *Bot) chatIDForUser(userID int64) string {
 func (b *Bot) run() {
 	b.cron.start()
 	defer b.cron.stop()
+	defer b.killAllProcesses()
+
+	if b.cfg.Backend.REPL {
+		go b.reapIdleProcesses()
+	}
 
 	b.startAPIServer()
 
@@ -331,6 +337,7 @@ func (b *Bot) handleCommand(chatID string, sess *Session, text string) {
 		b.reply(chatID, b.helpText())
 
 	case "new":
+		sess.killProc()
 		sess.mu.Lock()
 		sess.history = nil
 		sess.workspace = "global"
@@ -342,6 +349,7 @@ func (b *Bot) handleCommand(chatID string, sess *Session, text string) {
 		b.reply(chatID, "Session reset. Fresh start.")
 
 	case "clear":
+		sess.killProc()
 		sess.mu.Lock()
 		sess.history = nil
 		sess.mu.Unlock()
@@ -647,6 +655,7 @@ func (b *Bot) handleWorkspace(chatID string, sess *Session, args string) {
 			b.reply(chatID, fmt.Sprintf("External directory not accessible: %v", err))
 			return
 		}
+		sess.killProc()
 		sess.mu.Lock()
 		sess.workspace = ap.Alias
 		sess.workingDir = ap.Path
@@ -679,6 +688,7 @@ func (b *Bot) handleWorkspace(chatID string, sess *Session, args string) {
 		return
 	}
 
+	sess.killProc()
 	sess.mu.Lock()
 	sess.workspace = name
 	sess.workingDir = wsDir
@@ -1060,7 +1070,18 @@ func (b *Bot) runUserMessage(chatID string, sess *Session, text string) {
 
 	before := snapshotFiles(wd)
 
-	response, err := b.runClaude(sess.userID, text, ws, wd, model, hist)
+	var response string
+	var err error
+
+	if b.cfg.Backend.REPL && b.cfg.Backend.Type != "opencode" {
+		response, err = b.runClaudeREPL(sess, text)
+		if err != nil {
+			log.Printf("repl: failed, falling back to fire-and-wait: %v", err)
+			response, err = b.runClaude(sess.userID, text, ws, wd, model, hist)
+		}
+	} else {
+		response, err = b.runClaude(sess.userID, text, ws, wd, model, hist)
+	}
 	close(stopTyping)
 	if err != nil {
 		b.reply(chatID, fmt.Sprintf("Error: %s", err))
@@ -1301,6 +1322,7 @@ func (b *Bot) handleModelSwitch(chatID string, sess *Session, arg string) {
 	modelName := parts[0]
 	save := len(parts) > 1 && parts[1] == "--save"
 
+	sess.killProc()
 	sess.mu.Lock()
 	sess.model = modelName
 	ws := sess.workspace
@@ -1373,8 +1395,10 @@ func displayPathEx(path, userBaseDir string, allowed []AllowedPath) string {
 	return path
 }
 
-// runClaude executes the Claude CLI with all context provided explicitly (no session access).
-func (b *Bot) runClaude(userID int64, prompt, workspace, workingDir, model string, history []Message) (string, error) {
+// buildSystemPrompt constructs the system prompt for a given user/workspace/workingDir,
+// including persona, working dir rules, allowed paths, report guidance, README, memories, and skills.
+// It does NOT include conversation history (that's managed natively by REPL, or appended by runClaude for fire-and-wait).
+func (b *Bot) buildSystemPrompt(userID int64, workspace, workingDir string) string {
 	home, _ := os.UserHomeDir()
 	botHome := userWorkingDir(b.cfg.Backend.WorkingDir, userID)
 	allowedForUser := b.allowedPathsFor(userID)
@@ -1436,6 +1460,13 @@ func (b *Bot) runClaude(userID int64, prompt, workspace, workingDir, model strin
 		systemPrompt += "\n\n## Available Skills\nThe following custom /commands are available:\n" + strings.Join(skillLines, "\n")
 	}
 	b.skillsMu.RUnlock()
+
+	return systemPrompt
+}
+
+// runClaude executes the Claude CLI with all context provided explicitly (no session access).
+func (b *Bot) runClaude(userID int64, prompt, workspace, workingDir, model string, history []Message) (string, error) {
+	systemPrompt := b.buildSystemPrompt(userID, workspace, workingDir)
 
 	if len(history) > 0 {
 		systemPrompt += "\n\n## Recent conversation\n"

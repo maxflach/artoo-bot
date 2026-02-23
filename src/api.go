@@ -342,7 +342,7 @@ func (b *Bot) handleMCPMessage(w http.ResponseWriter, r *http.Request) {
 		}
 		runFn := func(prompt string) (string, error) {
 			wd := userWorkingDir(b.cfg.Backend.WorkingDir, adminID)
-			return b.runClaude(adminID, prompt, "global", wd, b.cfg.Backend.DefaultModel, nil)
+			return b.runClaude(adminID, adminID, prompt, "global", wd, b.cfg.Backend.DefaultModel, nil)
 		}
 
 		result, err := b.dispatchSkill(skill, args.Input, nil, runFn)

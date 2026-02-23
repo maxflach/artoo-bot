@@ -117,6 +117,7 @@ func newMemoryStore() (*MemoryStore, error) {
 	ms.initAPIKeysTable()
 	ms.initSecretsTable()
 	ms.initWishesTable()
+	ms.initWorkspaceSharesTable()
 	return ms, nil
 }
 
@@ -783,4 +784,106 @@ func (m *MemoryStore) listWishes() ([]Wish, error) {
 func (m *MemoryStore) markWishDone(id int64) error {
 	_, err := m.db.Exec("UPDATE wishes SET done = 1 WHERE id = ?", id)
 	return err
+}
+
+// --- Workspace shares ---
+
+// WorkspaceShare represents a shared workspace between users.
+type WorkspaceShare struct {
+	ID        int64
+	OwnerID   int64
+	OwnerName string // username from approved_users
+	Workspace string
+	GranteeID int64
+	Access    string
+	CreatedAt time.Time
+}
+
+func (m *MemoryStore) initWorkspaceSharesTable() {
+	m.db.Exec(`CREATE TABLE IF NOT EXISTS workspace_shares (
+		id          INTEGER PRIMARY KEY AUTOINCREMENT,
+		owner_id    INTEGER NOT NULL,
+		workspace   TEXT NOT NULL,
+		grantee_id  INTEGER NOT NULL,
+		access      TEXT NOT NULL DEFAULT 'read',
+		created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE(owner_id, workspace, grantee_id)
+	)`)
+	m.db.Exec(`CREATE INDEX IF NOT EXISTS idx_shares_grantee ON workspace_shares(grantee_id)`)
+	m.db.Exec(`CREATE INDEX IF NOT EXISTS idx_shares_owner ON workspace_shares(owner_id)`)
+}
+
+func (m *MemoryStore) shareWorkspace(ownerID int64, workspace string, granteeID int64, access string) error {
+	_, err := m.db.Exec(
+		`INSERT INTO workspace_shares (owner_id, workspace, grantee_id, access) VALUES (?, ?, ?, ?)
+		 ON CONFLICT(owner_id, workspace, grantee_id) DO UPDATE SET access = excluded.access`,
+		ownerID, workspace, granteeID, access,
+	)
+	return err
+}
+
+func (m *MemoryStore) unshareWorkspace(ownerID int64, workspace string, granteeID int64) error {
+	_, err := m.db.Exec(
+		`DELETE FROM workspace_shares WHERE owner_id = ? AND workspace = ? AND grantee_id = ?`,
+		ownerID, workspace, granteeID,
+	)
+	return err
+}
+
+func (m *MemoryStore) listSharedByMe(ownerID int64) []WorkspaceShare {
+	rows, err := m.db.Query(
+		`SELECT ws.id, ws.owner_id, COALESCE(au_o.username,''), ws.workspace, ws.grantee_id, ws.access, ws.created_at
+		 FROM workspace_shares ws
+		 LEFT JOIN approved_users au_o ON au_o.user_id = ws.owner_id
+		 WHERE ws.owner_id = ?
+		 ORDER BY ws.workspace, ws.grantee_id`,
+		ownerID,
+	)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var shares []WorkspaceShare
+	for rows.Next() {
+		var s WorkspaceShare
+		if err := rows.Scan(&s.ID, &s.OwnerID, &s.OwnerName, &s.Workspace, &s.GranteeID, &s.Access, &s.CreatedAt); err != nil {
+			continue
+		}
+		shares = append(shares, s)
+	}
+	return shares
+}
+
+func (m *MemoryStore) listSharedWithMe(granteeID int64) []WorkspaceShare {
+	rows, err := m.db.Query(
+		`SELECT ws.id, ws.owner_id, COALESCE(au_o.username,''), ws.workspace, ws.grantee_id, ws.access, ws.created_at
+		 FROM workspace_shares ws
+		 LEFT JOIN approved_users au_o ON au_o.user_id = ws.owner_id
+		 WHERE ws.grantee_id = ?
+		 ORDER BY ws.owner_id, ws.workspace`,
+		granteeID,
+	)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var shares []WorkspaceShare
+	for rows.Next() {
+		var s WorkspaceShare
+		if err := rows.Scan(&s.ID, &s.OwnerID, &s.OwnerName, &s.Workspace, &s.GranteeID, &s.Access, &s.CreatedAt); err != nil {
+			continue
+		}
+		shares = append(shares, s)
+	}
+	return shares
+}
+
+// getShareAccess returns "read", "write", or "" (no access) for a grantee on an owner's workspace.
+func (m *MemoryStore) getShareAccess(granteeID, ownerID int64, workspace string) string {
+	var access string
+	m.db.QueryRow(
+		`SELECT access FROM workspace_shares WHERE owner_id = ? AND workspace = ? AND grantee_id = ?`,
+		ownerID, workspace, granteeID,
+	).Scan(&access)
+	return access
 }

@@ -13,7 +13,8 @@ import (
 // runClaudeSession runs Claude with session persistence.
 // First call for a session creates it with --session-id; follow-ups use --resume.
 // This gives native multi-turn context without re-sending history.
-func (b *Bot) runClaudeSession(sess *Session, prompt string) (string, error) {
+// memUserID is used for memory loading (may differ from sess.userID in shared projects).
+func (b *Bot) runClaudeSession(sess *Session, memUserID int64, prompt string) (string, error) {
 	sess.mu.Lock()
 	sessionID := sess.claudeSessionID
 	ws := sess.workspace
@@ -26,7 +27,7 @@ func (b *Bot) runClaudeSession(sess *Session, prompt string) (string, error) {
 		sessionID = uuid.New().String()
 	}
 
-	systemPrompt := b.buildSystemPrompt(sess.userID, ws, wd)
+	systemPrompt := b.buildSystemPrompt(sess.userID, memUserID, ws, wd)
 
 	cmd := b.buildSessionCommand(prompt, model, systemPrompt, sessionID, isNew)
 	cmd.Dir = wd

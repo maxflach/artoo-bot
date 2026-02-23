@@ -269,6 +269,32 @@ func (t *TelegramTransport) handleCallback(cb *tgbotapi.CallbackQuery) {
 		t.handleSkillRunCallback(cb, strings.TrimPrefix(data, "skillrun:"))
 		return
 	}
+	if strings.HasPrefix(data, "modelswitch:") {
+		model := strings.TrimPrefix(data, "modelswitch:")
+		if sess := b.getSession(cb.From.ID); sess != nil {
+			t.clearButtons(cb)
+			b.handleModelSwitch(tgChatID(cb.From.ID), sess, model)
+		}
+		return
+	}
+	if data == "modelsave" {
+		if sess := b.getSession(cb.From.ID); sess != nil {
+			t.clearButtons(cb)
+			sess.mu.Lock()
+			model := b.activeModelForSession(sess)
+			sess.mu.Unlock()
+			b.handleModelSwitch(tgChatID(cb.From.ID), sess, model+" --save")
+		}
+		return
+	}
+	if strings.HasPrefix(data, "projshare:") {
+		t.handleProjShareCallback(cb, strings.TrimPrefix(data, "projshare:"))
+		return
+	}
+	if strings.HasPrefix(data, "projunshare:") {
+		t.handleProjUnshareCallback(cb, strings.TrimPrefix(data, "projunshare:"))
+		return
+	}
 
 	// Admin-only callbacks.
 	adminID := b.cfg.Telegram.AdminUserID
@@ -501,7 +527,7 @@ Create a well-structured markdown file called "%s":
 		}
 	}()
 
-	_, err = b.runClaude(sess.userID, prompt, ws, wd, model, nil)
+	_, err = b.runClaude(sess.userID, sess.userID, prompt, ws, wd, model, nil)
 	close(stopTyping)
 	if err != nil {
 		b.reply(chatID, fmt.Sprintf("File saved but extraction failed: %v", err))
@@ -518,12 +544,145 @@ Create a well-structured markdown file called "%s":
 			fmt.Sprintf("File uploaded: %s", doc.FileName),
 			string(mdContent),
 			func(p string) (string, error) {
-				return b.runClaude(sess.userID, p, ws, wd, b.cfg.Backend.ExtractModel, nil)
+				return b.runClaude(sess.userID, sess.userID, p, ws, wd, b.cfg.Backend.ExtractModel, nil)
 			},
 		)
 	}
 
 	b.reply(chatID, fmt.Sprintf("*%s* extracted to `%s` ✓", doc.FileName, mdName))
+}
+
+// handleProjShareCallback dispatches projshare: sub-callbacks (step2, step3, confirm).
+func (t *TelegramTransport) handleProjShareCallback(cb *tgbotapi.CallbackQuery, payload string) {
+	b := t.bot
+	sess := b.getSession(cb.From.ID)
+	if sess == nil {
+		return
+	}
+	chatID := tgChatID(cb.From.ID)
+	_, localChatID := splitChatID(chatID)
+
+	// payload is one of: "step2:<project>", "step3:<project>:<granteeID>", "confirm:<project>:<granteeID>:<access>"
+	parts := strings.SplitN(payload, ":", 2)
+	if len(parts) != 2 {
+		return
+	}
+	step, rest := parts[0], parts[1]
+
+	switch step {
+	case "step2":
+		// rest = projectName — show user picker
+		t.clearButtons(cb)
+		b.sendShareUserPicker(t, localChatID, sess.userID, rest)
+
+	case "step3":
+		// rest = "<project>:<granteeID>" — show access level picker
+		idx := strings.LastIndex(rest, ":")
+		if idx < 0 {
+			return
+		}
+		project := rest[:idx]
+		granteeIDStr := rest[idx+1:]
+		var granteeID int64
+		fmt.Sscanf(granteeIDStr, "%d", &granteeID)
+		t.clearButtons(cb)
+		t.SendWithButtons(localChatID,
+			fmt.Sprintf("*Share _%s_* — choose access level:", project),
+			[]Button{
+				{Label: "Read", Data: fmt.Sprintf("projshare:confirm:%s:%d:read", project, granteeID)},
+				{Label: "Read & Write", Data: fmt.Sprintf("projshare:confirm:%s:%d:write", project, granteeID)},
+			})
+
+	case "confirm":
+		// rest = "<project>:<granteeID>:<access>"
+		// Split from the right to get access first, then granteeID, then project.
+		lastColon := strings.LastIndex(rest, ":")
+		if lastColon < 0 {
+			return
+		}
+		access := rest[lastColon+1:]
+		mid := rest[:lastColon]
+		midColon := strings.LastIndex(mid, ":")
+		if midColon < 0 {
+			return
+		}
+		project := mid[:midColon]
+		granteeIDStr := mid[midColon+1:]
+		var granteeID int64
+		fmt.Sscanf(granteeIDStr, "%d", &granteeID)
+
+		if err := b.mem.shareWorkspace(sess.userID, project, granteeID, access); err != nil {
+			b.reply(chatID, fmt.Sprintf("Failed to share: %v", err))
+			return
+		}
+
+		granteeUsername := b.mem.usernameFor(granteeID)
+		accessLabel := access
+		if access == "write" {
+			accessLabel = "read & write"
+		}
+		ownerUsername := b.mem.usernameFor(sess.userID)
+
+		// Edit confirmation into the message.
+		if cb.Message != nil {
+			confirmText := fmt.Sprintf("✓ Shared *%s* with @%s (%s access)", project, granteeUsername, accessLabel)
+			edit := tgbotapi.NewEditMessageText(cb.Message.Chat.ID, cb.Message.MessageID, confirmText)
+			edit.ParseMode = "Markdown"
+			t.api.Request(edit)
+			t.api.Request(tgbotapi.NewEditMessageReplyMarkup(cb.Message.Chat.ID, cb.Message.MessageID, tgbotapi.InlineKeyboardMarkup{}))
+		}
+
+		// Notify grantee.
+		granteeChatID := b.chatIDForUser(granteeID)
+		if granteeChatID != "" {
+			b.reply(granteeChatID, fmt.Sprintf(
+				"@%s shared project `%s` with you (%s access).\nUse /project to switch to it.",
+				ownerUsername, project, accessLabel))
+		}
+	}
+}
+
+// handleProjUnshareCallback handles projunshare:<project>:<granteeID>.
+func (t *TelegramTransport) handleProjUnshareCallback(cb *tgbotapi.CallbackQuery, payload string) {
+	b := t.bot
+	sess := b.getSession(cb.From.ID)
+	if sess == nil {
+		return
+	}
+
+	lastColon := strings.LastIndex(payload, ":")
+	if lastColon < 0 {
+		return
+	}
+	project := payload[:lastColon]
+	granteeIDStr := payload[lastColon+1:]
+	var granteeID int64
+	fmt.Sscanf(granteeIDStr, "%d", &granteeID)
+
+	if err := b.mem.unshareWorkspace(sess.userID, project, granteeID); err != nil {
+		b.reply(tgChatID(cb.From.ID), fmt.Sprintf("Failed to revoke: %v", err))
+		return
+	}
+
+	granteeUsername := b.mem.usernameFor(granteeID)
+
+	// Edit the share message to show it's been revoked.
+	if cb.Message != nil {
+		revokedText := fmt.Sprintf("~*%s* → @%s — revoked~", project, granteeUsername)
+		edit := tgbotapi.NewEditMessageText(cb.Message.Chat.ID, cb.Message.MessageID, revokedText)
+		edit.ParseMode = "Markdown"
+		t.api.Request(edit)
+		t.api.Request(tgbotapi.NewEditMessageReplyMarkup(cb.Message.Chat.ID, cb.Message.MessageID, tgbotapi.InlineKeyboardMarkup{}))
+	}
+	t.api.Request(tgbotapi.NewCallback(cb.ID, "Access revoked ✓"))
+
+	// Notify grantee.
+	ownerUsername := b.mem.usernameFor(sess.userID)
+	granteeChatID := b.chatIDForUser(granteeID)
+	if granteeChatID != "" {
+		b.reply(granteeChatID, fmt.Sprintf(
+			"@%s has revoked your access to project `%s`.", ownerUsername, project))
+	}
 }
 
 // handleProjectSetupCallback processes button answers for interactive project creation.

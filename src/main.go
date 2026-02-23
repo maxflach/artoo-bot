@@ -28,9 +28,11 @@ type Session struct {
 	chatID     string // transport-prefixed, e.g. "tg:123456789"
 	workingDir string
 	workspace  string
-	model            string // session-level model override; "" means use workspace or default
-	claudeSessionID  string // Claude session UUID for multi-turn; "" means fresh
-	history          []Message
+	model           string // session-level model override; "" means use workspace or default
+	claudeSessionID string // Claude session UUID for multi-turn; "" means fresh
+	history         []Message
+	sharedOwnerID   int64  // non-zero when working in a shared project
+	sharedAccess    string // "read" or "write" when in a shared project
 }
 
 // ProjectOptions captures answers from the interactive new-project setup flow.
@@ -53,6 +55,16 @@ type PendingProject struct {
 	IsResearch  bool
 	AutoReport  bool
 	AgentStyle  string
+}
+
+// knownModels lists the models available in the /model button menu.
+var knownModels = []struct {
+	ID    string
+	Label string
+}{
+	{"claude-sonnet-4-6", "Sonnet 4.6"},
+	{"claude-opus-4-6", "Opus 4.6"},
+	{"claude-haiku-4-5", "Haiku 4.5"},
 }
 
 // agentStyleDef defines a named agent working style preset.
@@ -338,6 +350,8 @@ func (b *Bot) handleCommand(chatID string, sess *Session, text string) {
 		wd := userWorkingDir(b.cfg.Backend.WorkingDir, sess.userID)
 		sess.workingDir = wd
 		sess.model = ""
+		sess.sharedOwnerID = 0
+		sess.sharedAccess = ""
 		sess.mu.Unlock()
 		b.mem.saveUserState(sess.userID, "global", wd)
 		b.reply(chatID, "Session reset. Fresh start.")
@@ -352,6 +366,15 @@ func (b *Bot) handleCommand(chatID string, sess *Session, text string) {
 	case "workspace", "project":
 		if args == "" || args == "list" {
 			b.handleProjectList(chatID, sess)
+			return
+		}
+		if args == "shares" {
+			b.handleProjectShares(chatID, sess)
+			return
+		}
+		if args == "share" || strings.HasPrefix(args, "share ") {
+			shareArgs := strings.TrimSpace(strings.TrimPrefix(args, "share"))
+			b.handleProjectShare(chatID, sess, shareArgs)
 			return
 		}
 		if args == "update" || args == "edit" {
@@ -399,7 +422,7 @@ func (b *Bot) handleCommand(chatID string, sess *Session, text string) {
 
 	case "model":
 		if args == "" {
-			b.reply(chatID, fmt.Sprintf("Current model: `%s`", b.activeModelForSession(sess)))
+			b.handleModelMenu(chatID, sess)
 			return
 		}
 		b.handleModelSwitch(chatID, sess, args)
@@ -557,6 +580,7 @@ func (b *Bot) handleProjectList(chatID string, sess *Session) {
 	sess.mu.Lock()
 	activeWS := sess.workspace
 	activeWD := sess.workingDir
+	activeSharedOwnerID := sess.sharedOwnerID
 	sess.mu.Unlock()
 
 	type proj struct {
@@ -597,8 +621,24 @@ func (b *Bot) handleProjectList(chatID string, sess *Session) {
 		projects = append(projects, proj{"ext:" + ap.Alias, title, ap.Path, "projpath:" + ap.Path})
 	}
 
+	// Add projects shared with me.
+	for _, s := range b.mem.listSharedWithMe(sess.userID) {
+		ownerBaseDir := userWorkingDir(b.cfg.Backend.WorkingDir, s.OwnerID)
+		wsDir := projectDir(ownerBaseDir, s.Workspace)
+		switchKey := fmt.Sprintf("@%s/%s", s.OwnerName, s.Workspace)
+		accessLabel := s.Access
+		if s.Access == "write" {
+			accessLabel = "read & write"
+		}
+		title := fmt.Sprintf("@%s/%s (%s)", s.OwnerName, s.Workspace, accessLabel)
+		projects = append(projects, proj{switchKey, title, wsDir, "projswitch:" + switchKey})
+	}
+
 	isActive := func(p proj) bool {
-		if p.name == activeWS {
+		if activeSharedOwnerID != 0 && strings.HasPrefix(p.name, "@") {
+			return p.dir == activeWD
+		}
+		if activeSharedOwnerID == 0 && p.name == activeWS {
 			return true
 		}
 		if strings.HasPrefix(p.name, "ext:") && p.dir == activeWD {
@@ -643,6 +683,12 @@ func (b *Bot) handleWorkspace(chatID string, sess *Session, args string) {
 		description = strings.TrimSpace(parts[1])
 	}
 
+	// Shared project: @owner/project
+	if strings.HasPrefix(name, "@") {
+		b.handleSharedWorkspace(chatID, sess, name)
+		return
+	}
+
 	// External path branch — check before any other logic.
 	if ap, ok := b.matchAllowedPath(sess.userID, name); ok {
 		if _, err := os.Stat(ap.Path); err != nil {
@@ -655,6 +701,8 @@ func (b *Bot) handleWorkspace(chatID string, sess *Session, args string) {
 		sess.workingDir = ap.Path
 		sess.model = ""
 		sess.history = nil
+		sess.sharedOwnerID = 0
+		sess.sharedAccess = ""
 		sess.mu.Unlock()
 		b.mem.saveUserState(sess.userID, ap.Alias, ap.Path)
 		b.reply(chatID, fmt.Sprintf("Switched to *%s* (external) ✓", ap.Alias))
@@ -688,6 +736,8 @@ func (b *Bot) handleWorkspace(chatID string, sess *Session, args string) {
 	sess.workingDir = wsDir
 	sess.model = ""
 	sess.history = nil
+	sess.sharedOwnerID = 0
+	sess.sharedAccess = ""
 	sess.mu.Unlock()
 
 	b.mem.saveUserState(sess.userID, name, wsDir)
@@ -706,6 +756,55 @@ func (b *Bot) handleWorkspace(chatID string, sess *Session, args string) {
 			b.reply(chatID, fmt.Sprintf("Switched to *%s* ✓\nModel: `%s`", name, model))
 		}
 	}
+}
+
+// handleSharedWorkspace switches to a project owned by another user (format: @owner/project).
+func (b *Bot) handleSharedWorkspace(chatID string, sess *Session, name string) {
+	atPart := strings.TrimPrefix(name, "@")
+	slashIdx := strings.Index(atPart, "/")
+	if slashIdx < 0 {
+		b.reply(chatID, "Invalid shared project format. Use @owner/project.")
+		return
+	}
+	ownerUsername := atPart[:slashIdx]
+	projectName := atPart[slashIdx+1:]
+
+	ownerID := b.mem.userIDForUsername(ownerUsername)
+	if ownerID == 0 {
+		b.reply(chatID, fmt.Sprintf("User @%s not found.", ownerUsername))
+		return
+	}
+
+	access := b.mem.getShareAccess(sess.userID, ownerID, projectName)
+	if access == "" {
+		b.reply(chatID, fmt.Sprintf("You don't have access to @%s/%s.", ownerUsername, projectName))
+		return
+	}
+
+	ownerBaseDir := userWorkingDir(b.cfg.Backend.WorkingDir, ownerID)
+	wsDir := projectDir(ownerBaseDir, projectName)
+	if _, err := os.Stat(wsDir); err != nil {
+		b.reply(chatID, fmt.Sprintf("Shared project directory not found: %v", err))
+		return
+	}
+
+	sess.resetSession()
+	sess.mu.Lock()
+	sess.workspace = projectName
+	sess.workingDir = wsDir
+	sess.model = ""
+	sess.history = nil
+	sess.sharedOwnerID = ownerID
+	sess.sharedAccess = access
+	sess.mu.Unlock()
+
+	b.mem.saveUserState(sess.userID, projectName, wsDir)
+
+	accessLabel := "read"
+	if access == "write" {
+		accessLabel = "read & write"
+	}
+	b.reply(chatID, fmt.Sprintf("Switched to *@%s/%s* (%s access) ✓", ownerUsername, projectName, accessLabel))
 }
 
 // startProjectSetup begins interactive project configuration via buttons if the transport
@@ -766,7 +865,7 @@ func (b *Bot) generateWorkspaceReadme(chatID string, sess *Session, name, descri
 
 	prompt := buildReadmePrompt(name, description, opts)
 
-	response, err := b.runClaude(sess.userID, prompt, name, wsDir, model, nil)
+	response, err := b.runClaude(sess.userID, sess.userID, prompt, name, wsDir, model, nil)
 	if err != nil {
 		b.reply(chatID, fmt.Sprintf("Workspace created but README generation failed: %v", err))
 		return
@@ -867,7 +966,13 @@ func (b *Bot) handleProjectUpdate(chatID string, sess *Session, instruction stri
 	wsDir := sess.workingDir
 	ws := sess.workspace
 	model := b.activeModelForSession(sess)
+	canWrite := sess.sharedOwnerID == 0 || sess.sharedAccess == "write"
 	sess.mu.Unlock()
+
+	if !canWrite {
+		b.reply(chatID, "You have read-only access to this shared project. Ask the owner for write access.")
+		return
+	}
 
 	existing := readWorkspaceReadme(wsDir)
 	if existing == "" {
@@ -883,7 +988,7 @@ func (b *Bot) handleProjectUpdate(chatID string, sess *Session, instruction stri
 	}
 
 	b.reply(chatID, "Updating README...")
-	response, err := b.runClaude(sess.userID, prompt, ws, wsDir, model, nil)
+	response, err := b.runClaude(sess.userID, sess.userID, prompt, ws, wsDir, model, nil)
 	if err != nil {
 		b.reply(chatID, fmt.Sprintf("Failed: %v", err))
 		return
@@ -899,14 +1004,21 @@ func (b *Bot) handleProjectUpdate(chatID string, sess *Session, instruction stri
 
 // handleProjectUpdateButtons shows a button menu for updating parts of the current project.
 func (b *Bot) handleProjectUpdateButtons(chatID string, sess *Session) {
+	sess.mu.Lock()
+	canWrite := sess.sharedOwnerID == 0 || sess.sharedAccess == "write"
+	ws := sess.workspace
+	sess.mu.Unlock()
+
+	if !canWrite {
+		b.reply(chatID, "You have read-only access to this shared project. Ask the owner for write access.")
+		return
+	}
+
 	rt, localChatID, ok := b.richTransport(chatID)
 	if !ok {
 		b.handleProjectUpdate(chatID, sess, "")
 		return
 	}
-	sess.mu.Lock()
-	ws := sess.workspace
-	sess.mu.Unlock()
 	rt.SendButtonMenu(localChatID,
 		fmt.Sprintf("Update *%s* — what would you like to change?", ws),
 		[]Button{
@@ -915,6 +1027,123 @@ func (b *Bot) handleProjectUpdateButtons(chatID string, sess *Session) {
 			{Label: "View schedules", Data: "projupdate:schedules"},
 		},
 	)
+}
+
+// canWriteProject returns true if the user has write access to the current project.
+// Caller should hold sess.mu or have already snapshotted the relevant fields.
+func canWriteProject(sharedOwnerID int64, sharedAccess string) bool {
+	return sharedOwnerID == 0 || sharedAccess == "write"
+}
+
+// handleProjectShare is the entry point for the share wizard.
+// If args is a project name, jump to step 2 (user picker). Otherwise show project picker.
+func (b *Bot) handleProjectShare(chatID string, sess *Session, args string) {
+	rt, localChatID, ok := b.richTransport(chatID)
+	if !ok {
+		b.reply(chatID, "Use /project share in a button-enabled chat.")
+		return
+	}
+
+	if args != "" {
+		b.sendShareUserPicker(rt, localChatID, sess.userID, args)
+		return
+	}
+
+	// Step 1: show own projects as buttons.
+	baseWD := userWorkingDir(b.cfg.Backend.WorkingDir, sess.userID)
+	entries, err := os.ReadDir(baseWD)
+	if err != nil {
+		b.reply(chatID, "Could not read projects directory.")
+		return
+	}
+	var buttons []Button
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		buttons = append(buttons, Button{Label: name, Data: "projshare:step2:" + name})
+	}
+	if len(buttons) == 0 {
+		b.reply(chatID, "You have no projects to share.")
+		return
+	}
+	rt.SendButtonMenu(localChatID, "*Share a project* — pick one:", buttons)
+}
+
+// sendShareUserPicker shows a list of approved users (excluding owner) to pick a grantee.
+func (b *Bot) sendShareUserPicker(rt RichTransport, localChatID string, ownerID int64, project string) {
+	users := b.mem.listApprovedUsers()
+	var buttons []Button
+	for _, u := range users {
+		if u.UserID == ownerID {
+			continue
+		}
+		label := u.Name
+		if u.Username != "" {
+			label += " (@" + u.Username + ")"
+		}
+		buttons = append(buttons, Button{
+			Label: label,
+			Data:  fmt.Sprintf("projshare:step3:%s:%d", project, u.UserID),
+		})
+	}
+	if len(buttons) == 0 {
+		rt.SendButtonMenu(localChatID, "No other approved users to share with.", []Button{})
+		return
+	}
+	rt.SendButtonMenu(localChatID, fmt.Sprintf("*Share _%s_* — pick a user:", project), buttons)
+}
+
+// handleProjectShares lists all shares owned by (and shared with) the current user.
+func (b *Bot) handleProjectShares(chatID string, sess *Session) {
+	sharedByMe := b.mem.listSharedByMe(sess.userID)
+	sharedWithMe := b.mem.listSharedWithMe(sess.userID)
+
+	if len(sharedByMe) == 0 && len(sharedWithMe) == 0 {
+		b.reply(chatID, "No shares configured.\n\nUse `/project share` to share a project with another user.")
+		return
+	}
+
+	rt, localChatID, hasButtons := b.richTransport(chatID)
+
+	if len(sharedByMe) > 0 {
+		if hasButtons {
+			b.reply(chatID, "*Projects I've shared:*")
+			for _, s := range sharedByMe {
+				granteeUsername := b.mem.usernameFor(s.GranteeID)
+				accessLabel := s.Access
+				if s.Access == "write" {
+					accessLabel = "read & write"
+				}
+				text := fmt.Sprintf("*%s* → @%s (%s access)", s.Workspace, granteeUsername, accessLabel)
+				rt.SendWithButtons(localChatID, text, []Button{
+					{Label: "Revoke", Data: fmt.Sprintf("projunshare:%s:%d", s.Workspace, s.GranteeID)},
+				})
+			}
+		} else {
+			var lines []string
+			lines = append(lines, "*Projects I've shared:*")
+			for _, s := range sharedByMe {
+				granteeUsername := b.mem.usernameFor(s.GranteeID)
+				lines = append(lines, fmt.Sprintf("• *%s* → @%s (%s)", s.Workspace, granteeUsername, s.Access))
+			}
+			b.reply(chatID, strings.Join(lines, "\n"))
+		}
+	}
+
+	if len(sharedWithMe) > 0 {
+		var lines []string
+		lines = append(lines, "*Shared with me:*")
+		for _, s := range sharedWithMe {
+			accessLabel := s.Access
+			if s.Access == "write" {
+				accessLabel = "read & write"
+			}
+			lines = append(lines, fmt.Sprintf("• @%s/*%s* (%s)", s.OwnerName, s.Workspace, accessLabel))
+		}
+		b.reply(chatID, strings.Join(lines, "\n"))
+	}
 }
 
 // handleProjectStyleUpdate replaces the ## Agent section in the current project README.
@@ -1052,7 +1281,20 @@ func (b *Bot) runUserMessage(chatID string, sess *Session, text string) {
 	model := b.activeModelForSession(sess)
 	hist := make([]Message, len(sess.history))
 	copy(hist, sess.history)
+	sharedOwnerID := sess.sharedOwnerID
+	sharedAccess := sess.sharedAccess
 	sess.mu.Unlock()
+
+	// For shared projects, load memories under the owner's ID so the grantee sees project context.
+	// Save new memories under the owner's ID for write access, grantee's own ID for read access.
+	memLoadUserID := sess.userID
+	memSaveUserID := sess.userID
+	if sharedOwnerID != 0 {
+		memLoadUserID = sharedOwnerID
+		if sharedAccess == "write" {
+			memSaveUserID = sharedOwnerID
+		}
+	}
 
 	phrase := ackForPrompt(text)
 	ackIdx++ // advance for next call
@@ -1068,13 +1310,13 @@ func (b *Bot) runUserMessage(chatID string, sess *Session, text string) {
 	var err error
 
 	if b.cfg.Backend.REPL && b.cfg.Backend.Type != "opencode" {
-		response, err = b.runClaudeSession(sess, text)
+		response, err = b.runClaudeSession(sess, memLoadUserID, text)
 		if err != nil {
 			log.Printf("repl: failed, falling back to fire-and-wait: %v", err)
-			response, err = b.runClaude(sess.userID, text, ws, wd, model, hist)
+			response, err = b.runClaude(sess.userID, memLoadUserID, text, ws, wd, model, hist)
 		}
 	} else {
-		response, err = b.runClaude(sess.userID, text, ws, wd, model, hist)
+		response, err = b.runClaude(sess.userID, memLoadUserID, text, ws, wd, model, hist)
 	}
 	close(stopTyping)
 	if err != nil {
@@ -1114,8 +1356,8 @@ func (b *Bot) runUserMessage(chatID string, sess *Session, text string) {
 	}
 	sess.mu.Unlock()
 
-	go b.mem.extractAndSave(sess.userID, ws, text, response, func(prompt string) (string, error) {
-		return b.runClaude(sess.userID, prompt, ws, wd, b.cfg.Backend.ExtractModel, nil)
+	go b.mem.extractAndSave(memSaveUserID, ws, text, response, func(prompt string) (string, error) {
+		return b.runClaude(sess.userID, memLoadUserID, prompt, ws, wd, b.cfg.Backend.ExtractModel, nil)
 	})
 }
 
@@ -1262,7 +1504,7 @@ func (b *Bot) runScheduledTask(id, userID int64, chatID string, workspace, worki
 
 	before := snapshotFiles(wd)
 
-	response, err := b.runClaude(userID, prompt, workspace, wd, model, hist)
+	response, err := b.runClaude(userID, userID, prompt, workspace, wd, model, hist)
 	b.mem.updateLastRun(id)
 
 	if err != nil {
@@ -1306,6 +1548,29 @@ func (b *Bot) activeModelForSession(sess *Session) string {
 		return ws
 	}
 	return b.cfg.Backend.DefaultModel
+}
+
+// handleModelMenu shows a button menu for switching models, or a text fallback.
+func (b *Bot) handleModelMenu(chatID string, sess *Session) {
+	sess.mu.Lock()
+	active := b.activeModelForSession(sess)
+	sess.mu.Unlock()
+
+	if rt, localChatID, ok := b.richTransport(chatID); ok {
+		buttons := make([]Button, 0, len(knownModels)+1)
+		for _, m := range knownModels {
+			label := m.Label
+			if m.ID == active {
+				label = "✓ " + label
+			}
+			buttons = append(buttons, Button{Label: label, Data: "modelswitch:" + m.ID})
+		}
+		buttons = append(buttons, Button{Label: "Save current to project", Data: "modelsave"})
+		rt.SendButtonMenu(localChatID, fmt.Sprintf("*Switch model*\nCurrent: `%s`", active), buttons)
+		return
+	}
+
+	b.reply(chatID, fmt.Sprintf("Current model: `%s`", active))
 }
 
 func (b *Bot) handleModelSwitch(chatID string, sess *Session, arg string) {
@@ -1391,8 +1656,9 @@ func displayPathEx(path, userBaseDir string, allowed []AllowedPath) string {
 
 // buildSystemPrompt constructs the system prompt for a given user/workspace/workingDir,
 // including persona, working dir rules, allowed paths, report guidance, README, memories, and skills.
+// memUserID is used for memory loading (may differ from userID when in a shared project).
 // It does NOT include conversation history (that's managed natively by REPL, or appended by runClaude for fire-and-wait).
-func (b *Bot) buildSystemPrompt(userID int64, workspace, workingDir string) string {
+func (b *Bot) buildSystemPrompt(userID, memUserID int64, workspace, workingDir string) string {
 	home, _ := os.UserHomeDir()
 	botHome := userWorkingDir(b.cfg.Backend.WorkingDir, userID)
 	allowedForUser := b.allowedPathsFor(userID)
@@ -1435,7 +1701,7 @@ func (b *Bot) buildSystemPrompt(userID int64, workspace, workingDir string) stri
 		systemPrompt += "\n\n## Workspace Configuration (README.md)\n\n" + readmeContent
 	}
 
-	if mem := b.mem.load(userID, workspace, b.cfg.Memory.MaxAgeDays); mem != "" {
+	if mem := b.mem.load(memUserID, workspace, b.cfg.Memory.MaxAgeDays); mem != "" {
 		memoriesContent := strings.ReplaceAll(mem, "~", home)
 		systemPrompt += "\n\n" + memoriesContent
 	}
@@ -1459,8 +1725,9 @@ func (b *Bot) buildSystemPrompt(userID int64, workspace, workingDir string) stri
 }
 
 // runClaude executes the Claude CLI with all context provided explicitly (no session access).
-func (b *Bot) runClaude(userID int64, prompt, workspace, workingDir, model string, history []Message) (string, error) {
-	systemPrompt := b.buildSystemPrompt(userID, workspace, workingDir)
+// memUserID is used for memory loading; pass userID for the normal case.
+func (b *Bot) runClaude(userID, memUserID int64, prompt, workspace, workingDir, model string, history []Message) (string, error) {
+	systemPrompt := b.buildSystemPrompt(userID, memUserID, workspace, workingDir)
 
 	if len(history) > 0 {
 		systemPrompt += "\n\n## Recent conversation\n"
@@ -1587,7 +1854,7 @@ func (b *Bot) runSkill(chatID string, sess *Session, skill *Skill, args string) 
 	}
 
 	runFn := func(prompt string) (string, error) {
-		return b.runClaude(userID, prompt, ws, wd, model, hist)
+		return b.runClaude(userID, userID, prompt, ws, wd, model, hist)
 	}
 	result, err := b.dispatchSkill(skill, args, extraEnv, runFn)
 	if err != nil {
@@ -1899,6 +2166,8 @@ func (b *Bot) helpText() string {
 			"/project <name> | <description> — create project with README\n"+
 			"/project update — improve current project README\n"+
 			"/project update <instruction> — update README with specific changes\n"+
+			"/project share — share a project with another user (button wizard)\n"+
+			"/project shares — list shares and revoke access\n"+
 			"Send a file → saved to project + extracted as markdown memory\n\n"+
 			"*Memory*\n"+
 			"/memory — show memories for the current project\n"+

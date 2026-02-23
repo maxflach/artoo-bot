@@ -3,13 +3,16 @@
 ## v0.13 — 2026-02-23
 
 ### Added
-- **Session-resume mode** — when `backend.repl: true`, the bot uses Claude Code's native session persistence (`--session-id` / `--resume`) for multi-turn context. The first message in a conversation creates a session; follow-ups resume it with `--resume <uuid>`. Conversation history is managed natively by the CLI instead of being pasted into the system prompt. Falls back to fire-and-wait automatically on any failure.
-- **`backend.repl` config option** — `true` enables session-resume mode (claude-code only); `false` (default) keeps the existing fire-and-wait behavior. Has no effect on `opencode` backend.
-- **`src/repl.go`** — new file: `runClaudeSession()` handles session lifecycle, `buildSessionCommand()` constructs the `--session-id`/`--resume` invocation, `resetSession()` clears session on context changes
+- **Persistent REPL sessions** — when `backend.repl: true`, the bot keeps a long-running Claude Code subprocess per user instead of spawning a fresh process for every message. Multi-turn context is managed natively by the CLI (no more pasting history into the system prompt). Falls back to fire-and-wait automatically on REPL failure.
+- **`backend.repl` config option** — `true` enables persistent REPL mode (claude-code only); `false` (default) keeps the existing fire-and-wait behavior. Has no effect on `opencode` backend.
+- **`src/repl.go`** — new file: `ClaudeProcess` struct wrapping a `--input-format stream-json --output-format stream-json` subprocess; NDJSON protocol for bidirectional messaging; process lifecycle management
+- **Config drift detection** — REPL process automatically restarts when the model, workspace, or working directory changes (via `/model`, `/project`, `/new`)
+- **Idle process reaper** — background goroutine checks every 5 minutes; kills REPL processes idle for 20+ minutes; active requests are never interrupted
+- **Graceful shutdown** — all REPL processes receive SIGINT on bot exit, with a 3-second SIGKILL fallback
 
 ### Changed
-- **`buildSystemPrompt()` extracted** — system prompt construction (persona, working dir rules, allowed paths, report guidance, README, memories, skills) is now a standalone method, shared by both session-resume and fire-and-wait modes
-- **`/new`, `/clear`, `/model`, `/project`** — all context-changing commands now reset the Claude session, ensuring the next message starts fresh
+- **`buildSystemPrompt()` extracted** — system prompt construction (persona, working dir rules, allowed paths, report guidance, README, memories, skills) is now a standalone method, shared by both REPL and fire-and-wait modes
+- **`/new`, `/clear`, `/model`, `/project`** — all context-changing commands now kill the REPL process before resetting state, ensuring the next message starts with a fresh system prompt
 
 ---
 

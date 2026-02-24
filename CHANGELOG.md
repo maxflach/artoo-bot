@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.15 — 2026-02-24
+
+### Added
+- **React web chat UI** — replaces the single-file inline HTML/JS chat with a proper React 18 app (Vite + TypeScript + Tailwind CSS v4 + Jotai + React Router). Built output is embedded in the Go binary via `//go:embed webchat_dist`.
+  - **Project sidebar** — lists all projects (local, external, shared) with active highlight; click to switch; collapsible on narrow screens
+  - **Per-project message history** — chat history persisted to `localStorage` keyed by project name, survives reloads and project switches
+  - **Markdown rendering** — bot messages rendered via `react-markdown` with avatar
+  - **Hash-based routing** — `#/p/:project` URLs; browser back/forward works across project switches
+- **`GET /chat/projects`** — new API endpoint (Bearer auth) returning the project list and active project for the admin user
+- **`POST /chat/switch`** — new API endpoint (Bearer auth) to switch the active project session-side without sending a reply message
+- **`buildProjectList()` helper** — extracted from `handleProjectList`; shared by both the Telegram handler and the new API endpoint
+- **`webchatSwitchProject()` helper** — performs workspace switch (local, external, shared) without sending reply messages; used by `/chat/switch`
+
+### Changed
+- **`webchat.go`** — removed `chatPageHTML` inline string and `handleChatPage`; static files now served from embedded `webchat_dist/` via `fs.Sub` + `http.FileServer`; `RegisterRoutes` updated with new endpoints
+
 ## v0.14 — 2026-02-23
 
 ### Added

@@ -9,10 +9,17 @@ export interface ChatMessage {
   ts: number
 }
 
-// Persisted to localStorage
-export const apiKeyAtom = atomWithStorage<string>('webchat_key', '')
+// Persisted to localStorage.
+// getOnInit: true makes Jotai read from storage immediately on atom init (first render)
+// rather than starting with the default value and patching in onMount (after paint).
+export const apiKeyAtom = atomWithStorage<string>('webchat_key', '', undefined, { getOnInit: true })
 // Messages keyed by project name so each project has its own history
-export const allMsgsAtom = atomWithStorage<Record<string, ChatMessage[]>>('webchat_msgs', {})
+export const allMsgsAtom = atomWithStorage<Record<string, ChatMessage[]>>(
+  'webchat_msgs',
+  {},
+  undefined,
+  { getOnInit: true },
+)
 
 // In-memory only (reset on reload)
 export const sessionIDAtom = atom<string>('')

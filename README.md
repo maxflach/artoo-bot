@@ -375,7 +375,7 @@ Drop a file or folder into a `skills/` directory to create a new `/command` — 
 
 **Skill types:**
 
-- **Executable** (`.sh` or any executable file) — run with user input as `$1`; stdout returned to the user
+- **Executable** (`.sh` or any executable file) — run with user input as args; stdout returned to the user
 - **Markdown** (`.md`) — contents prepended to the user's input and run through Claude
 
 **Folder-based skills** — a skill can be a folder. The entrypoint is `run.sh` (or `run`). The folder can contain data files.
@@ -387,7 +387,9 @@ Drop a file or folder into a `skills/` directory to create a new `/command` — 
     └── jokes.json   # bundled data file
 ```
 
-A demo `dadjoke` skill is installed automatically by `install.sh`. To see what's loaded:
+Two skills are installed automatically by `install.sh`: `dadjoke` and `imagine`. Additional skills for Gmail and Google Calendar are included in this repo — see **[SKILLS.md](SKILLS.md)** for full documentation on all bundled skills and how to write your own.
+
+To see what's loaded:
 
 ```
 /skills
@@ -471,6 +473,8 @@ If you want to back up your secrets, back up both the database (`~/.config/bot/<
 Setting it with `--global` means it works in every project without having to set it again.
 
 The `imagine` skill is installed automatically by `install.sh`. It calls the Gemini Imagen API, saves the result as a PNG to your working directory, and the bot sends it back as a Telegram photo.
+
+See [SKILLS.md](SKILLS.md) for all bundled skills and their setup instructions.
 
 ---
 
@@ -722,7 +726,9 @@ Set `repl: false` (default) to use the original fire-and-wait mode where each me
 - [x] Custom skills — drop scripts or prompts into `skills/` to create `/commands`
 - [x] MCP server — skills exposed as tools for Claude mid-task
 - [x] Secrets vault — encrypted credentials scoped per-project and locked to specific skills
-- [x] Image generation — `/imagine` demo skill via Gemini Imagen
+- [x] Image generation — `/imagine` skill via Gemini Imagen
+- [x] Gmail skill — inbox overview, search, read, archive, bulk-archive
+- [x] Google Calendar skill — day/week view, event search, event creation
 - [x] Multi-transport — Telegram, Discord, web chat
 - [x] Docker support — `Dockerfile` + `docker-compose.yml` with Claude Code, pdf tools, and python pre-installed
 - [x] Allowed external paths — admin-provisioned access to directories outside the user sandbox

@@ -1,13 +1,23 @@
 package main
 
 import (
+	"embed"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 )
+
+//go:embed artoo.png
+var avatarPNG []byte
+
+//go:embed webchat_dist
+var webchatDist embed.FS
 
 // WebChatTransport implements Transport using Server-Sent Events + HTTP POST.
 // Browsers connect to GET /chat/sse for a real-time event stream, and POST
@@ -55,106 +65,22 @@ func (wc *WebChatTransport) Start(handler func(IncomingMessage)) error {
 // RegisterRoutes mounts the web chat endpoints on the given mux.
 // Must be called before Start().
 func (wc *WebChatTransport) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("/chat", wc.bot.requireAPIKey(wc.handleChatPage))
-	mux.HandleFunc("/chat/sse", wc.handleSSE) // auth via query param
+	// Static files: serve the built React app under /chat/
+	sub, _ := fs.Sub(webchatDist, "webchat_dist")
+	mux.Handle("/chat/", http.StripPrefix("/chat/", http.FileServer(http.FS(sub))))
+
+	// Explicit handlers take priority over the /chat/ catch-all above.
+	mux.HandleFunc("/chat/avatar.png", wc.handleAvatar)
+	mux.HandleFunc("/chat/sse", wc.handleSSE)
 	mux.HandleFunc("/chat/message", wc.bot.requireAPIKey(wc.handleMessage))
+	mux.HandleFunc("/chat/projects", wc.bot.requireAPIKey(wc.handleProjects))
+	mux.HandleFunc("/chat/switch", wc.bot.requireAPIKey(wc.handleSwitch))
 }
 
-const chatPageHTML = `<!DOCTYPE html>
-<html>
-<head>
-  <title>%s</title>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-           background: #1a1a1a; color: #e0e0e0; height: 100vh; display: flex; flex-direction: column; }
-    #messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
-    .msg { max-width: 80%%; padding: 8px 12px; border-radius: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
-    .msg.user { background: #2b6cb0; align-self: flex-end; }
-    .msg.bot  { background: #2d2d2d; align-self: flex-start; border: 1px solid #444; }
-    #input-row { display: flex; gap: 8px; padding: 12px; border-top: 1px solid #333; }
-    #input { flex: 1; padding: 10px 14px; border-radius: 8px; border: 1px solid #444;
-             background: #2d2d2d; color: #e0e0e0; font-size: 15px; resize: none; }
-    #send { padding: 10px 20px; background: #2b6cb0; color: white; border: none;
-            border-radius: 8px; cursor: pointer; font-size: 15px; }
-    #send:hover { background: #3182ce; }
-    #send:disabled { background: #555; cursor: default; }
-    #status { padding: 4px 12px; font-size: 12px; color: #666; background: #111; }
-    #no-key { padding: 20px; color: #f66; }
-  </style>
-</head>
-<body>
-<div id="no-key" hidden></div>
-<div id="messages"></div>
-<div id="status">Connecting...</div>
-<div id="input-row">
-  <textarea id="input" rows="2" placeholder="Message %s..."></textarea>
-  <button id="send" disabled>Send</button>
-</div>
-<script>
-const token = new URLSearchParams(location.search).get('key') || localStorage.getItem('webchat_key');
-if (!token) {
-  const d = document.getElementById('no-key');
-  d.removeAttribute('hidden');
-  d.textContent = 'No API key. Visit /chat?key=YOUR_KEY';
-  document.getElementById('input-row').style.display = 'none';
-  document.getElementById('status').style.display = 'none';
-} else {
-  localStorage.setItem('webchat_key', token);
-}
-
-const msgs = document.getElementById('messages');
-const input = document.getElementById('input');
-const sendBtn = document.getElementById('send');
-const status = document.getElementById('status');
-let sessionID = '';
-
-function appendMsg(role, text) {
-  const d = document.createElement('div');
-  d.className = 'msg ' + role;
-  d.textContent = text;
-  msgs.appendChild(d);
-  msgs.scrollTop = msgs.scrollHeight;
-}
-
-const es = new EventSource('/chat/sse?key=' + encodeURIComponent(token));
-es.onopen = () => { status.textContent = 'Connected'; sendBtn.disabled = false; };
-es.onerror = () => { status.textContent = 'Disconnected — reload to reconnect'; sendBtn.disabled = true; };
-es.addEventListener('session', e => { sessionID = e.data; });
-es.addEventListener('message', e => { appendMsg('bot', e.data.replace(/\r/g, '\n')); });
-
-async function sendMessage() {
-  const text = input.value.trim();
-  if (!text) return;
-  appendMsg('user', text);
-  input.value = '';
-  sendBtn.disabled = true;
-  status.textContent = 'Working...';
-  try {
-    await fetch('/chat/message', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-      body: JSON.stringify({ text, session_id: sessionID })
-    });
-  } catch(e) { appendMsg('bot', 'Error: ' + e.message); }
-  sendBtn.disabled = false;
-  status.textContent = 'Connected';
-}
-
-sendBtn.addEventListener('click', sendMessage);
-input.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
-});
-</script>
-</body>
-</html>
-`
-
-func (wc *WebChatTransport) handleChatPage(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html")
-	fmt.Fprintf(w, chatPageHTML, wc.bot.cfg.Persona.Name, wc.bot.cfg.Persona.Name)
+func (wc *WebChatTransport) handleAvatar(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Write(avatarPNG)
 }
 
 // handleSSE opens a Server-Sent Events stream. Auth via ?key= query param so the
@@ -224,15 +150,7 @@ func (wc *WebChatTransport) handleMessage(w http.ResponseWriter, r *http.Request
 	}
 
 	// Web chat runs as the admin user.
-	userID := wc.bot.cfg.Telegram.AdminUserID
-	if userID == 0 {
-		wc.bot.sessionsMu.RLock()
-		for id := range wc.bot.sessions {
-			userID = id
-			break
-		}
-		wc.bot.sessionsMu.RUnlock()
-	}
+	userID := wc.adminUserID()
 	if userID == 0 {
 		apiError(w, http.StatusInternalServerError, "no user configured")
 		return
@@ -253,4 +171,267 @@ func (wc *WebChatTransport) handleMessage(w http.ResponseWriter, r *http.Request
 	}
 
 	apiJSON(w, http.StatusAccepted, map[string]string{"status": "queued"})
+}
+
+// projectEntry is the JSON shape for a single project in the /chat/projects response.
+type projectEntry struct {
+	Name  string `json:"name"`
+	Title string `json:"title"`
+	Type  string `json:"type"` // "local", "external", "shared"
+}
+
+// handleProjects returns the project list for the admin user.
+func (wc *WebChatTransport) handleProjects(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		apiError(w, http.StatusMethodNotAllowed, "GET only")
+		return
+	}
+
+	userID := wc.adminUserID()
+	if userID == 0 {
+		apiError(w, http.StatusInternalServerError, "no user configured")
+		return
+	}
+
+	sess := wc.bot.getSession(userID)
+	if sess == nil {
+		apiError(w, http.StatusInternalServerError, "no session for user")
+		return
+	}
+
+	active, entries := wc.bot.buildProjectList(userID, sess)
+	apiJSON(w, http.StatusOK, map[string]any{
+		"active":   active,
+		"projects": entries,
+	})
+}
+
+// handleSwitch switches the active project for the admin user's session.
+func (wc *WebChatTransport) handleSwitch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		apiError(w, http.StatusMethodNotAllowed, "POST only")
+		return
+	}
+
+	var body struct {
+		Project string `json:"project"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Project == "" {
+		apiError(w, http.StatusBadRequest, "project is required")
+		return
+	}
+
+	userID := wc.adminUserID()
+	if userID == 0 {
+		apiError(w, http.StatusInternalServerError, "no user configured")
+		return
+	}
+
+	sess := wc.bot.getSession(userID)
+	if sess == nil {
+		apiError(w, http.StatusInternalServerError, "no session for user")
+		return
+	}
+
+	name, title, err := wc.bot.webchatSwitchProject(sess, body.Project)
+	if err != nil {
+		apiError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	apiJSON(w, http.StatusOK, map[string]any{
+		"ok":    true,
+		"name":  name,
+		"title": title,
+	})
+}
+
+// adminUserID returns the configured admin user ID, falling back to the first
+// known session if no explicit admin is configured.
+func (wc *WebChatTransport) adminUserID() int64 {
+	if wc.bot.cfg.Telegram.AdminUserID != 0 {
+		return wc.bot.cfg.Telegram.AdminUserID
+	}
+	wc.bot.sessionsMu.RLock()
+	defer wc.bot.sessionsMu.RUnlock()
+	for id := range wc.bot.sessions {
+		return id
+	}
+	return 0
+}
+
+// buildProjectList returns the active project name and the full project list
+// for a given user, mirroring the logic in handleProjectList.
+func (b *Bot) buildProjectList(userID int64, sess *Session) (active string, entries []projectEntry) {
+	sess.mu.Lock()
+	activeWS := sess.workspace
+	activeWD := sess.workingDir
+	activeSharedOwnerID := sess.sharedOwnerID
+	sess.mu.Unlock()
+
+	baseWD := userWorkingDir(b.cfg.Backend.WorkingDir, userID)
+
+	// Global project is always first.
+	entries = append(entries, projectEntry{Name: "global", Title: "Global (default)", Type: "local"})
+	active = "global"
+	if activeSharedOwnerID == 0 && activeWS != "" {
+		active = activeWS
+	}
+
+	// Local sub-projects.
+	if dirEntries, err := os.ReadDir(baseWD); err == nil {
+		for _, e := range dirEntries {
+			if !e.IsDir() {
+				continue
+			}
+			name := e.Name()
+			title := name
+			dir := filepath.Join(baseWD, name)
+			if readme := readWorkspaceReadme(dir); readme != "" {
+				for _, line := range strings.Split(readme, "\n") {
+					if strings.HasPrefix(line, "# ") {
+						title = strings.TrimPrefix(line, "# ")
+						break
+					}
+				}
+			}
+			entries = append(entries, projectEntry{Name: name, Title: title, Type: "local"})
+		}
+	}
+
+	// External paths.
+	for _, ap := range b.allowedPathsFor(userID) {
+		title := "[ext] " + ap.Alias
+		if readme := readWorkspaceReadme(ap.Path); readme != "" {
+			for _, line := range strings.Split(readme, "\n") {
+				if strings.HasPrefix(line, "# ") {
+					title = "[ext] " + strings.TrimPrefix(line, "# ")
+					break
+				}
+			}
+		}
+		extName := "ext:" + ap.Alias
+		entries = append(entries, projectEntry{Name: extName, Title: title, Type: "external"})
+		if activeSharedOwnerID == 0 && (activeWS == ap.Alias || activeWD == ap.Path) {
+			active = extName
+		}
+	}
+
+	// Projects shared with this user.
+	for _, s := range b.mem.listSharedWithMe(userID) {
+		ownerBaseDir := userWorkingDir(b.cfg.Backend.WorkingDir, s.OwnerID)
+		wsDir := projectDir(ownerBaseDir, s.Workspace)
+		switchKey := fmt.Sprintf("@%s/%s", s.OwnerName, s.Workspace)
+		accessLabel := s.Access
+		if s.Access == "write" {
+			accessLabel = "read & write"
+		}
+		title := fmt.Sprintf("@%s/%s (%s)", s.OwnerName, s.Workspace, accessLabel)
+		entries = append(entries, projectEntry{Name: switchKey, Title: title, Type: "shared"})
+		if activeSharedOwnerID != 0 && activeWD == wsDir {
+			active = switchKey
+		}
+	}
+
+	return active, entries
+}
+
+// webchatSwitchProject switches the session to the named project without sending
+// any reply messages. Returns the canonical name and display title.
+func (b *Bot) webchatSwitchProject(sess *Session, name string) (resultName, title string, err error) {
+	// Shared project: @owner/project
+	if strings.HasPrefix(name, "@") {
+		atPart := strings.TrimPrefix(name, "@")
+		slashIdx := strings.Index(atPart, "/")
+		if slashIdx < 0 {
+			return "", "", fmt.Errorf("invalid shared project format; use @owner/project")
+		}
+		ownerUsername := atPart[:slashIdx]
+		projectName := atPart[slashIdx+1:]
+
+		ownerID := b.mem.userIDForUsername(ownerUsername)
+		if ownerID == 0 {
+			return "", "", fmt.Errorf("user @%s not found", ownerUsername)
+		}
+
+		access := b.mem.getShareAccess(sess.userID, ownerID, projectName)
+		if access == "" {
+			return "", "", fmt.Errorf("no access to @%s/%s", ownerUsername, projectName)
+		}
+
+		ownerBaseDir := userWorkingDir(b.cfg.Backend.WorkingDir, ownerID)
+		wsDir := projectDir(ownerBaseDir, projectName)
+		if _, statErr := os.Stat(wsDir); statErr != nil {
+			return "", "", fmt.Errorf("shared project directory not found")
+		}
+
+		sess.resetSession()
+		sess.mu.Lock()
+		sess.workspace = projectName
+		sess.workingDir = wsDir
+		sess.model = ""
+		sess.history = nil
+		sess.sharedOwnerID = ownerID
+		sess.sharedAccess = access
+		sess.mu.Unlock()
+		b.mem.saveUserState(sess.userID, projectName, wsDir)
+
+		accessLabel := access
+		if access == "write" {
+			accessLabel = "read & write"
+		}
+		return name, fmt.Sprintf("@%s/%s (%s)", ownerUsername, projectName, accessLabel), nil
+	}
+
+	// External path: ext:alias or bare alias
+	if ap, ok := b.matchAllowedPath(sess.userID, name); ok {
+		if _, statErr := os.Stat(ap.Path); statErr != nil {
+			return "", "", fmt.Errorf("external directory not accessible: %v", statErr)
+		}
+		sess.resetSession()
+		sess.mu.Lock()
+		sess.workspace = ap.Alias
+		sess.workingDir = ap.Path
+		sess.model = ""
+		sess.history = nil
+		sess.sharedOwnerID = 0
+		sess.sharedAccess = ""
+		sess.mu.Unlock()
+		b.mem.saveUserState(sess.userID, ap.Alias, ap.Path)
+		return "ext:" + ap.Alias, "[ext] " + ap.Alias, nil
+	}
+
+	// Reject bare absolute paths.
+	if filepath.IsAbs(name) {
+		return "", "", fmt.Errorf("absolute paths not allowed")
+	}
+
+	// Regular local project.
+	baseWD := userWorkingDir(b.cfg.Backend.WorkingDir, sess.userID)
+	wsDir := projectDir(baseWD, name)
+	if err := os.MkdirAll(wsDir, 0755); err != nil {
+		return "", "", fmt.Errorf("failed to create project directory: %v", err)
+	}
+
+	sess.resetSession()
+	sess.mu.Lock()
+	sess.workspace = name
+	sess.workingDir = wsDir
+	sess.model = ""
+	sess.history = nil
+	sess.sharedOwnerID = 0
+	sess.sharedAccess = ""
+	sess.mu.Unlock()
+	b.mem.saveUserState(sess.userID, name, wsDir)
+
+	title = name
+	if readme := readWorkspaceReadme(wsDir); readme != "" {
+		for _, line := range strings.Split(readme, "\n") {
+			if strings.HasPrefix(line, "# ") {
+				title = strings.TrimPrefix(line, "# ")
+				break
+			}
+		}
+	}
+	return name, title, nil
 }

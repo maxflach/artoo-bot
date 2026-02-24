@@ -24,8 +24,5 @@ config.yaml
 # macOS
 .DS_Store
 
-# UI build output (must run `cd ui && npm run build` before `go build`)
-src/webchat_dist/
-
 # UI dependencies
 ui/node_modules/

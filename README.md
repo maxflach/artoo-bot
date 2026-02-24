@@ -87,7 +87,9 @@ Any CLI that accepts a prompt and returns text output can work — configure it 
 
 **Web chat** (optional):
 - Set `webchat.enabled: true` in config and make sure `api.port` is non-zero
-- Access at `http://localhost:<port>/chat?key=<apikey>` — works great over Tailscale
+- Navigate to `http://<host>:<port>/chat` — a login screen prompts for an API key (stored in `localStorage`)
+- Full React UI: project sidebar, per-project message history that survives reloads, bot replies rendered as markdown
+- Works great over Tailscale
 
 ---
 
@@ -167,6 +169,13 @@ Then clone and build:
 git clone https://github.com/maxflach/artoo-bot
 cd artoo-bot
 cd src && go build -o ../bot .
+```
+
+The pre-built React web chat UI (`src/webchat_dist/`) is committed to the repo, so no Node.js is required to build. If you modify the UI source (`ui/`), rebuild it first:
+
+```bash
+cd ui && npm install && npm run build
+cd ../src && go build -o ../bot .
 ```
 
 ### Run the setup wizard
@@ -690,7 +699,11 @@ Each skill becomes a tool with the skill's name and description. Claude can call
 ```
 Telegram ─┐
 Discord  ─┤─→ Bot (Go) ←── HTTP API  (Bearer token auth)
-Web chat ─┘        │           ├── /chat, /chat/sse  (web chat UI)
+Web chat ─┘        │           ├── /chat/           (React SPA — embedded dist)
+                   │           ├── /chat/sse         (SSE stream, auth via ?key=)
+                   │           ├── /chat/message     (send message)
+                   │           ├── /chat/projects    (project list)
+                   │           ├── /chat/switch      (switch project)
                    │           └── MCP server  (/mcp/sse, /mcp/message)
                    ├── SQLite  (memories, projects, schedules, users, api keys, secrets)
                    ├── secrets.key  (~/.config/bot/<instance>/secrets.key, mode 0600)
@@ -729,7 +742,7 @@ Set `repl: false` (default) to use the original fire-and-wait mode where each me
 - [x] Image generation — `/imagine` skill via Gemini Imagen
 - [x] Gmail skill — inbox overview, search, read, archive, bulk-archive
 - [x] Google Calendar skill — day/week view, event search, event creation
-- [x] Multi-transport — Telegram, Discord, web chat
+- [x] Multi-transport — Telegram, Discord, web chat (React UI with sidebar, project switching, persistent history)
 - [x] Docker support — `Dockerfile` + `docker-compose.yml` with Claude Code, pdf tools, and python pre-installed
 - [x] Allowed external paths — admin-provisioned access to directories outside the user sandbox
 - [x] Session-resume mode — native multi-turn context via Claude Code's `--session-id` / `--resume`

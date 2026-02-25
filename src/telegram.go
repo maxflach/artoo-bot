@@ -105,6 +105,27 @@ func (t *TelegramTransport) SendButtonMenu(chatID string, text string, buttons [
 	return err
 }
 
+// SendGrid implements RichTransport — sends a message with buttons organized into custom rows.
+func (t *TelegramTransport) SendGrid(chatID string, text string, rows [][]Button) error {
+	id, err := strconv.ParseInt(chatID, 10, 64)
+	if err != nil {
+		return fmt.Errorf("telegram: invalid chatID %q: %w", chatID, err)
+	}
+	telegramRows := make([][]tgbotapi.InlineKeyboardButton, len(rows))
+	for i, row := range rows {
+		telegramRows[i] = make([]tgbotapi.InlineKeyboardButton, len(row))
+		for j, b := range row {
+			telegramRows[i][j] = tgbotapi.NewInlineKeyboardButtonData(b.Label, b.Data)
+		}
+	}
+	keyboard := tgbotapi.NewInlineKeyboardMarkup(telegramRows...)
+	msg := tgbotapi.NewMessage(id, text)
+	msg.ParseMode = "Markdown"
+	msg.ReplyMarkup = keyboard
+	_, err = t.api.Send(msg)
+	return err
+}
+
 // sendPhoto sends an image file as a Telegram photo (not a document).
 func (t *TelegramTransport) sendPhoto(chatID string, filePath string) error {
 	id, err := strconv.ParseInt(chatID, 10, 64)
@@ -293,6 +314,20 @@ func (t *TelegramTransport) handleCallback(cb *tgbotapi.CallbackQuery) {
 	}
 	if strings.HasPrefix(data, "projunshare:") {
 		t.handleProjUnshareCallback(cb, strings.TrimPrefix(data, "projunshare:"))
+		return
+	}
+	if strings.HasPrefix(data, "attime:") {
+		if sess := b.getSession(cb.From.ID); sess != nil {
+			t.clearButtons(cb)
+			t.handleAtTimeCallback(cb, sess, strings.TrimPrefix(data, "attime:"))
+		}
+		return
+	}
+	if strings.HasPrefix(data, "schedwiz:") {
+		if sess := b.getSession(cb.From.ID); sess != nil {
+			t.clearButtons(cb)
+			t.handleSchedWizCallback(cb, sess, strings.TrimPrefix(data, "schedwiz:"))
+		}
 		return
 	}
 
@@ -682,6 +717,118 @@ func (t *TelegramTransport) handleProjUnshareCallback(cb *tgbotapi.CallbackQuery
 	if granteeChatID != "" {
 		b.reply(granteeChatID, fmt.Sprintf(
 			"@%s has revoked your access to project `%s`.", ownerUsername, project))
+	}
+}
+
+// handleAtTimeCallback handles the attime: callback — user picked a time for a /at reminder.
+func (t *TelegramTransport) handleAtTimeCallback(cb *tgbotapi.CallbackQuery, sess *Session, timeStr string) {
+	b := t.bot
+	chatID := tgChatID(cb.From.ID)
+
+	cronExpr, desc, err := parseAtTime(timeStr)
+	if err != nil {
+		b.reply(chatID, fmt.Sprintf("Couldn't parse time: %v", err))
+		return
+	}
+
+	sess.mu.Lock()
+	wiz := sess.scheduleWizard
+	sess.mu.Unlock()
+
+	if wiz != nil && wiz.IsAt && wiz.Prompt != "" {
+		// Prompt was pre-supplied — schedule immediately.
+		sess.mu.Lock()
+		ws := sess.workspace
+		wd := sess.workingDir
+		cid := sess.chatID
+		sess.scheduleWizard = nil
+		sess.mu.Unlock()
+
+		name := fmt.Sprintf("at:%s", timeStr)
+		if err := b.mem.addSchedule(sess.userID, cid, name, cronExpr, wiz.Prompt, ws, wd, true); err != nil {
+			b.reply(chatID, fmt.Sprintf("Failed to set reminder: %v", err))
+			return
+		}
+		b.cron.reload()
+		b.reply(chatID, fmt.Sprintf("Scheduled for *%s* ✓", desc))
+		return
+	}
+
+	// Store the time and wait for the user to type the prompt.
+	sess.mu.Lock()
+	sess.scheduleWizard = &ScheduleWizard{
+		IsAt:     true,
+		CronExpr: cronExpr,
+		CronDesc: desc,
+		Step:     "awaiting_prompt",
+	}
+	sess.mu.Unlock()
+
+	b.reply(chatID, fmt.Sprintf("Got it — *%s*.\nWhat should I do? Send me the task:", desc))
+}
+
+// handleSchedWizCallback handles the schedwiz: callback — user is in the /schedule wizard.
+func (t *TelegramTransport) handleSchedWizCallback(cb *tgbotapi.CallbackQuery, sess *Session, data string) {
+	b := t.bot
+	chatID := tgChatID(cb.From.ID)
+	_, localChatID := splitChatID(chatID)
+
+	parts := strings.SplitN(data, ":", 2)
+	if len(parts) != 2 {
+		return
+	}
+	subCmd, value := parts[0], parts[1]
+
+	switch subCmd {
+	case "full":
+		// Complete recurrence, no time selection needed.
+		cronExpr, desc, err := parseRecurring(value)
+		if err != nil {
+			b.reply(chatID, fmt.Sprintf("Error: %v", err))
+			return
+		}
+		sess.mu.Lock()
+		if sess.scheduleWizard == nil {
+			sess.scheduleWizard = &ScheduleWizard{}
+		}
+		sess.scheduleWizard.CronExpr = cronExpr
+		sess.scheduleWizard.CronDesc = desc
+		sess.scheduleWizard.Step = "awaiting_prompt"
+		sess.mu.Unlock()
+		b.reply(chatID, fmt.Sprintf("Got it — *%s*.\nWhat should I run? Send me the task prompt:", desc))
+
+	case "base":
+		// Recurrence needs a time — show time picker.
+		sess.mu.Lock()
+		if sess.scheduleWizard == nil {
+			sess.scheduleWizard = &ScheduleWizard{}
+		}
+		sess.scheduleWizard.RecurrenceBase = value
+		sess.scheduleWizard.Step = "time"
+		sess.mu.Unlock()
+		if rt, _, ok := b.richTransport(chatID); ok {
+			rt.SendGrid(localChatID, "Pick a time:", timePickerGrid())
+		}
+
+	case "time":
+		sess.mu.Lock()
+		wiz := sess.scheduleWizard
+		sess.mu.Unlock()
+		if wiz == nil {
+			return
+		}
+		fullRecurrence := wiz.RecurrenceBase + " " + value
+		cronExpr, desc, err := parseRecurring(fullRecurrence)
+		if err != nil {
+			b.reply(chatID, fmt.Sprintf("Error: %v", err))
+			return
+		}
+		sess.mu.Lock()
+		sess.scheduleWizard.CronExpr = cronExpr
+		sess.scheduleWizard.CronDesc = desc
+		sess.scheduleWizard.Step = "awaiting_prompt"
+		sess.mu.Unlock()
+		b.reply(chatID, fmt.Sprintf("Got it — *%s*.\nWhat should I run? Send me the task prompt:", desc))
 	}
 }
 

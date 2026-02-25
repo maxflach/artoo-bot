@@ -41,6 +41,9 @@ type RichTransport interface {
 	SendWithButtons(chatID string, text string, buttons []Button) error
 	// SendButtonMenu sends a message with one button per row (vertical menu).
 	SendButtonMenu(chatID string, text string, buttons []Button) error
+	// SendGrid sends a message with buttons organized into custom rows.
+	// Each inner slice becomes one row of buttons.
+	SendGrid(chatID string, text string, rows [][]Button) error
 }
 
 // makeChatID builds a prefixed chatID string from transport name and local ID.

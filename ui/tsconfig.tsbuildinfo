@@ -1,1 +1,1 @@
-{"root":["./src/app.tsx","./src/api.ts","./src/atoms.ts","./src/main.tsx","./src/components/chatpane.tsx","./src/components/login.tsx","./src/components/message.tsx","./src/components/sidebar.tsx"],"version":"5.9.3"}
+{"root":["./src/app.tsx","./src/api.ts","./src/atoms.ts","./src/main.tsx","./src/components/chatpane.tsx","./src/components/login.tsx","./src/components/message.tsx","./src/components/scheduledialog.tsx","./src/components/sidebar.tsx"],"version":"5.9.3"}

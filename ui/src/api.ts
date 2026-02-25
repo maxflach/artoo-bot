@@ -44,3 +44,50 @@ export async function sendMessage(key: string, text: string, sessionID: string):
     body: JSON.stringify({ text, session_id: sessionID }),
   })
 }
+
+export interface Schedule {
+  id: number
+  name: string
+  schedule: string
+  prompt: string
+  workspace: string
+  one_shot: boolean
+  enabled: boolean
+  last_run: string | null
+}
+
+export async function fetchSchedules(key: string): Promise<Schedule[]> {
+  const r = await fetch('/chat/schedules', {
+    headers: { Authorization: `Bearer ${key}` },
+  })
+  if (!r.ok) throw new Error(`${r.status}`)
+  const data = await r.json()
+  return data.schedules ?? []
+}
+
+export async function createSchedule(
+  key: string,
+  name: string,
+  when: string,
+  prompt: string,
+  oneShot: boolean,
+): Promise<{ desc: string }> {
+  const r = await fetch('/chat/schedules', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+    body: JSON.stringify({ name, when, prompt, one_shot: oneShot }),
+  })
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({ error: r.statusText }))
+    throw new Error(err.error ?? r.statusText)
+  }
+  return r.json()
+}
+
+export async function deleteSchedule(key: string, id: number): Promise<void> {
+  const r = await fetch(`/chat/schedules/${id}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${key}` },
+  })
+  if (!r.ok) throw new Error(`${r.status}`)
+}

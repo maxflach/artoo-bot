@@ -75,6 +75,8 @@ func (wc *WebChatTransport) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/chat/message", wc.bot.requireAPIKey(wc.handleMessage))
 	mux.HandleFunc("/chat/projects", wc.bot.requireAPIKey(wc.handleProjects))
 	mux.HandleFunc("/chat/switch", wc.bot.requireAPIKey(wc.handleSwitch))
+	mux.HandleFunc("/chat/schedules", wc.bot.requireAPIKey(wc.handleSchedules))
+	mux.HandleFunc("/chat/schedules/", wc.bot.requireAPIKey(wc.handleScheduleByID))
 }
 
 func (wc *WebChatTransport) handleAvatar(w http.ResponseWriter, r *http.Request) {
@@ -434,4 +436,140 @@ func (b *Bot) webchatSwitchProject(sess *Session, name string) (resultName, titl
 		}
 	}
 	return name, title, nil
+}
+
+// scheduleEntry is the JSON shape for a single schedule in the /chat/schedules response.
+type scheduleEntry struct {
+	ID        int64   `json:"id"`
+	Name      string  `json:"name"`
+	Schedule  string  `json:"schedule"`
+	Prompt    string  `json:"prompt"`
+	Workspace string  `json:"workspace"`
+	OneShot   bool    `json:"one_shot"`
+	Enabled   bool    `json:"enabled"`
+	LastRun   *string `json:"last_run"`
+}
+
+// handleSchedules handles GET and POST /chat/schedules.
+func (wc *WebChatTransport) handleSchedules(w http.ResponseWriter, r *http.Request) {
+	userID := wc.adminUserID()
+	if userID == 0 {
+		apiError(w, http.StatusInternalServerError, "no user configured")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		schedules, err := wc.bot.mem.listSchedulesForUser(userID)
+		if err != nil {
+			apiError(w, http.StatusInternalServerError, "failed to list schedules")
+			return
+		}
+		entries := make([]scheduleEntry, 0, len(schedules))
+		for _, s := range schedules {
+			var lastRun *string
+			if s.LastRun != nil {
+				ts := s.LastRun.UTC().Format("2006-01-02T15:04:05Z")
+				lastRun = &ts
+			}
+			entries = append(entries, scheduleEntry{
+				ID:        s.ID,
+				Name:      s.Name,
+				Schedule:  s.Schedule,
+				Prompt:    s.Prompt,
+				Workspace: s.Workspace,
+				OneShot:   s.OneShot,
+				Enabled:   s.Enabled,
+				LastRun:   lastRun,
+			})
+		}
+		apiJSON(w, http.StatusOK, map[string]any{"schedules": entries})
+
+	case http.MethodPost:
+		var body struct {
+			Name   string `json:"name"`
+			When   string `json:"when"`
+			Prompt string `json:"prompt"`
+			OneShot bool  `json:"one_shot"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			apiError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+		if body.When == "" || body.Prompt == "" {
+			apiError(w, http.StatusBadRequest, "when and prompt are required")
+			return
+		}
+
+		sess := wc.bot.getSession(userID)
+		if sess == nil {
+			apiError(w, http.StatusInternalServerError, "no session for user")
+			return
+		}
+
+		var cronExpr, desc string
+		var err error
+		if body.OneShot {
+			cronExpr, desc, err = parseAtTime(body.When)
+		} else {
+			cronExpr, desc, err = parseRecurring(body.When)
+		}
+		if err != nil {
+			apiError(w, http.StatusBadRequest, fmt.Sprintf("invalid when: %v", err))
+			return
+		}
+
+		sess.mu.Lock()
+		ws := sess.workspace
+		wd := sess.workingDir
+		cid := sess.chatID
+		sess.mu.Unlock()
+
+		name := body.Name
+		if name == "" {
+			name = body.Prompt
+			if len(name) > 40 {
+				name = name[:40]
+			}
+			name = strings.ReplaceAll(name, "\n", " ")
+		}
+
+		if err := wc.bot.mem.addSchedule(userID, cid, name, cronExpr, body.Prompt, ws, wd, body.OneShot); err != nil {
+			apiError(w, http.StatusInternalServerError, "failed to create schedule")
+			return
+		}
+		wc.bot.cron.reload()
+		apiJSON(w, http.StatusCreated, map[string]any{"ok": true, "desc": desc})
+
+	default:
+		apiError(w, http.StatusMethodNotAllowed, "GET or POST only")
+	}
+}
+
+// handleScheduleByID handles DELETE /chat/schedules/{id}.
+func (wc *WebChatTransport) handleScheduleByID(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		apiError(w, http.StatusMethodNotAllowed, "DELETE only")
+		return
+	}
+
+	userID := wc.adminUserID()
+	if userID == 0 {
+		apiError(w, http.StatusInternalServerError, "no user configured")
+		return
+	}
+
+	idStr := strings.TrimPrefix(r.URL.Path, "/chat/schedules/")
+	var id int64
+	if _, err := fmt.Sscanf(idStr, "%d", &id); err != nil || id == 0 {
+		apiError(w, http.StatusBadRequest, "invalid schedule id")
+		return
+	}
+
+	if err := wc.bot.mem.deleteSchedule(userID, id); err != nil {
+		apiError(w, http.StatusInternalServerError, "failed to delete schedule")
+		return
+	}
+	wc.bot.cron.reload()
+	apiJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

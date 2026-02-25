@@ -4,12 +4,14 @@ import { apiKeyAtom } from './atoms'
 import Login from './components/Login'
 import Sidebar from './components/Sidebar'
 import ChatPane from './components/ChatPane'
+import ScheduleDialog from './components/ScheduleDialog'
 
 function Layout() {
   return (
     <div className="flex h-screen bg-zinc-900 text-zinc-100 overflow-hidden">
       <Sidebar />
       <ChatPane />
+      <ScheduleDialog />
     </div>
   )
 }

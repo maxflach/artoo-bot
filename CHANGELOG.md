@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.17 — 2026-02-25
+
+### Changed
+- **Webchat UI refresh** — significant visual polish across all components:
+  - Near-black (`zinc-950`) app background with `zinc-900` sidebar for intentional depth contrast
+  - Sidebar header now shows bot avatar + name; active project gets a blue dot indicator; error states use styled boxes
+  - ChatPane header shows the project name prominently with status text below; "Disconnected" only appears in red after a successful connection was lost — first load shows "Connecting…" in gray
+  - Empty chat state: centered avatar with soft glow and "How can I help?" prompt
+  - Input redesigned as a unified card (textarea + send button share one rounded-2xl container)
+  - Animated three-dot thinking indicator replaces "Thinking…" text
+  - Bot message bubbles use `bg-zinc-900` with a subtle `border-white/8` for contrast on the dark background; user bubbles have a depth shadow
+  - Login: radial background glow, styled error box, refined layout
+  - Custom thin scrollbars and `thinking-dot` keyframe animation added to `index.css`
+
 ## v0.16 — 2026-02-25
 
 ### Added

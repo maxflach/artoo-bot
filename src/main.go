@@ -533,7 +533,7 @@ func (b *Bot) handleCommand(chatID string, sess *Session, text string) {
 		sess.mu.Lock()
 		ws := sess.workspace
 		sess.mu.Unlock()
-		b.reply(chatID, b.mem.listFiles(sess.userID, ws))
+		b.handleFileList(chatID, sess, ws)
 
 	case "model":
 		if args == "" {
@@ -1613,6 +1613,28 @@ func (b *Bot) handleScheduleWizardPrompt(chatID string, sess *Session, prompt st
 		b.reply(chatID, fmt.Sprintf("Scheduled for *%s* ✓", wiz.CronDesc))
 	} else {
 		b.reply(chatID, fmt.Sprintf("Schedule *%s* added — %s ✓", name, wiz.CronDesc))
+	}
+}
+
+// handleFileList lists the project's files. On rich transports each file gets a Download button.
+func (b *Bot) handleFileList(chatID string, sess *Session, workspace string) {
+	files, err := b.mem.listFilesForUser(sess.userID, workspace)
+	if err != nil || len(files) == 0 {
+		b.reply(chatID, "No files in this project yet.")
+		return
+	}
+
+	rt, localChatID, hasButtons := b.richTransport(chatID)
+
+	for _, f := range files {
+		text := fmt.Sprintf("📄 *%s*\n%s · %s ago", f.Filename, humanSize(f.Size), formatAge(f.CreatedAt))
+		if hasButtons {
+			rt.SendWithButtons(localChatID, text, []Button{
+				{Label: "📥 Download", Data: fmt.Sprintf("sendfile:%d", f.ID)},
+			})
+		} else {
+			b.reply(chatID, text)
+		}
 	}
 }
 

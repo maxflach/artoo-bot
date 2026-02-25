@@ -1,7 +1,7 @@
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { apiKeyAtom, projectsAtom, scheduleDialogOpenAtom } from '../atoms'
+import { apiKeyAtom, filesDialogOpenAtom, projectsAtom, scheduleDialogOpenAtom } from '../atoms'
 import { fetchProjects, switchProject, type Project } from '../api'
 
 function typeIcon(type: string) {
@@ -15,6 +15,7 @@ export default function Sidebar() {
   const [projects, setProjects] = useAtom(projectsAtom)
   const setApiKey = useSetAtom(apiKeyAtom)
   const setScheduleDialogOpen = useSetAtom(scheduleDialogOpenAtom)
+  const setFilesDialogOpen = useSetAtom(filesDialogOpenAtom)
   const navigate = useNavigate()
   const { project: rawProject } = useParams<{ project: string }>()
   const currentProject = decodeURIComponent(rawProject ?? 'global')
@@ -105,6 +106,12 @@ export default function Sidebar() {
       </div>
 
       <div className="border-t border-zinc-700 p-3 flex flex-col gap-1">
+        <button
+          onClick={() => setFilesDialogOpen(true)}
+          className="w-full text-sm text-zinc-400 hover:text-zinc-100 transition-colors py-1 flex items-center gap-2"
+        >
+          <span>📁</span> Files
+        </button>
         <button
           onClick={() => setScheduleDialogOpen(true)}
           className="w-full text-sm text-zinc-400 hover:text-zinc-100 transition-colors py-1 flex items-center gap-2"

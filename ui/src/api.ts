@@ -91,3 +91,42 @@ export async function deleteSchedule(key: string, id: number): Promise<void> {
   })
   if (!r.ok) throw new Error(`${r.status}`)
 }
+
+export interface ProjectFile {
+  id: number
+  filename: string
+  size: number
+  created_at: string
+  workspace: string
+  is_text: boolean
+}
+
+export async function fetchFiles(key: string): Promise<ProjectFile[]> {
+  const r = await fetch('/chat/files', {
+    headers: { Authorization: `Bearer ${key}` },
+  })
+  if (!r.ok) throw new Error(`${r.status}`)
+  const data = await r.json()
+  return data.files ?? []
+}
+
+export async function fetchFileContent(key: string, id: number): Promise<string> {
+  const r = await fetch(`/chat/files/${id}/content`, {
+    headers: { Authorization: `Bearer ${key}` },
+  })
+  if (!r.ok) throw new Error(`${r.status}`)
+  return r.text()
+}
+
+export async function saveFileContent(key: string, id: number, content: string): Promise<void> {
+  const r = await fetch(`/chat/files/${id}/content`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${key}` },
+    body: content,
+  })
+  if (!r.ok) throw new Error(`${r.status}`)
+}
+
+export function fileDownloadURL(id: number): string {
+  return `/chat/files/${id}`
+}

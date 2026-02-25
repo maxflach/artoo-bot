@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -77,6 +78,8 @@ func (wc *WebChatTransport) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/chat/switch", wc.bot.requireAPIKey(wc.handleSwitch))
 	mux.HandleFunc("/chat/schedules", wc.bot.requireAPIKey(wc.handleSchedules))
 	mux.HandleFunc("/chat/schedules/", wc.bot.requireAPIKey(wc.handleScheduleByID))
+	mux.HandleFunc("/chat/files", wc.bot.requireAPIKey(wc.handleFiles))
+	mux.HandleFunc("/chat/files/", wc.bot.requireAPIKey(wc.handleFileByID))
 }
 
 func (wc *WebChatTransport) handleAvatar(w http.ResponseWriter, r *http.Request) {
@@ -572,4 +575,152 @@ func (wc *WebChatTransport) handleScheduleByID(w http.ResponseWriter, r *http.Re
 	}
 	wc.bot.cron.reload()
 	apiJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// isTextFile returns true if the file extension is a known plain-text format.
+func isTextFile(name string) bool {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".html", ".css",
+		".js", ".ts", ".go", ".py", ".sh", ".bash", ".zsh", ".xml", ".csv",
+		".log", ".env", ".ini", ".conf", ".sql":
+		return true
+	}
+	return false
+}
+
+// fileEntry is the JSON shape for a file in the /chat/files response.
+type fileEntry struct {
+	ID        int64   `json:"id"`
+	Filename  string  `json:"filename"`
+	Size      int64   `json:"size"`
+	CreatedAt string  `json:"created_at"`
+	Workspace string  `json:"workspace"`
+	IsText    bool    `json:"is_text"`
+}
+
+// handleFiles handles GET /chat/files — lists files for the current project.
+func (wc *WebChatTransport) handleFiles(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		apiError(w, http.StatusMethodNotAllowed, "GET only")
+		return
+	}
+
+	userID := wc.adminUserID()
+	if userID == 0 {
+		apiError(w, http.StatusInternalServerError, "no user configured")
+		return
+	}
+
+	sess := wc.bot.getSession(userID)
+	if sess == nil {
+		apiError(w, http.StatusInternalServerError, "no session for user")
+		return
+	}
+
+	sess.mu.Lock()
+	ws := sess.workspace
+	sess.mu.Unlock()
+
+	files, err := wc.bot.mem.listFilesForUser(userID, ws)
+	if err != nil {
+		apiError(w, http.StatusInternalServerError, "failed to list files")
+		return
+	}
+
+	entries := make([]fileEntry, 0, len(files))
+	for _, f := range files {
+		entries = append(entries, fileEntry{
+			ID:        f.ID,
+			Filename:  f.Filename,
+			Size:      f.Size,
+			CreatedAt: f.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+			Workspace: f.Workspace,
+			IsText:    isTextFile(f.Filename),
+		})
+	}
+	apiJSON(w, http.StatusOK, map[string]any{"files": entries})
+}
+
+// handleFileByID handles GET and PUT /chat/files/{id}/content.
+func (wc *WebChatTransport) handleFileByID(w http.ResponseWriter, r *http.Request) {
+	userID := wc.adminUserID()
+	if userID == 0 {
+		apiError(w, http.StatusInternalServerError, "no user configured")
+		return
+	}
+
+	// Path: /chat/files/{id}/content  OR  /chat/files/{id}
+	trimmed := strings.TrimPrefix(r.URL.Path, "/chat/files/")
+	parts := strings.SplitN(trimmed, "/", 2)
+	var id int64
+	if _, err := fmt.Sscanf(parts[0], "%d", &id); err != nil || id == 0 {
+		apiError(w, http.StatusBadRequest, "invalid file id")
+		return
+	}
+	sub := ""
+	if len(parts) == 2 {
+		sub = parts[1]
+	}
+
+	f, err := wc.bot.mem.fileByID(userID, id)
+	if err != nil {
+		apiError(w, http.StatusNotFound, "file not found")
+		return
+	}
+
+	switch sub {
+	case "content":
+		switch r.Method {
+		case http.MethodGet:
+			if !isTextFile(f.Filename) {
+				apiError(w, http.StatusBadRequest, "binary file — not readable as text")
+				return
+			}
+			data, err := os.ReadFile(f.Path)
+			if err != nil {
+				apiError(w, http.StatusNotFound, "file not accessible on disk")
+				return
+			}
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.WriteHeader(http.StatusOK)
+			w.Write(data)
+
+		case http.MethodPut:
+			if !isTextFile(f.Filename) {
+				apiError(w, http.StatusBadRequest, "binary file — cannot edit")
+				return
+			}
+			body, err := io.ReadAll(io.LimitReader(r.Body, 10<<20)) // 10 MB limit
+			if err != nil {
+				apiError(w, http.StatusBadRequest, "failed to read body")
+				return
+			}
+			if err := os.WriteFile(f.Path, body, 0644); err != nil {
+				apiError(w, http.StatusInternalServerError, "failed to write file")
+				return
+			}
+			// Update size in DB.
+			wc.bot.mem.recordFile(userID, f.Workspace, f.Filename, f.Path, int64(len(body)))
+			apiJSON(w, http.StatusOK, map[string]any{"ok": true})
+
+		default:
+			apiError(w, http.StatusMethodNotAllowed, "GET or PUT only")
+		}
+
+	default:
+		// /chat/files/{id} — serve the raw file as a download.
+		if r.Method != http.MethodGet {
+			apiError(w, http.StatusMethodNotAllowed, "GET only")
+			return
+		}
+		fh, err := os.Open(f.Path)
+		if err != nil {
+			apiError(w, http.StatusNotFound, "file not accessible on disk")
+			return
+		}
+		defer fh.Close()
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, f.Filename))
+		w.Header().Set("Content-Type", "application/octet-stream")
+		io.Copy(w, fh)
+	}
 }

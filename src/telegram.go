@@ -316,6 +316,20 @@ func (t *TelegramTransport) handleCallback(cb *tgbotapi.CallbackQuery) {
 		t.handleProjUnshareCallback(cb, strings.TrimPrefix(data, "projunshare:"))
 		return
 	}
+	if strings.HasPrefix(data, "sendfile:") {
+		var fileID int64
+		fmt.Sscanf(strings.TrimPrefix(data, "sendfile:"), "%d", &fileID)
+		if sess := b.getSession(cb.From.ID); sess != nil {
+			f, err := b.mem.fileByID(sess.userID, fileID)
+			if err != nil || f.Path == "" {
+				t.api.Request(tgbotapi.NewCallback(cb.ID, "File not found"))
+				return
+			}
+			t.api.Request(tgbotapi.NewCallback(cb.ID, "Sending…"))
+			go t.sendFileAuto(strconv.FormatInt(cb.From.ID, 10), f.Path)
+		}
+		return
+	}
 	if strings.HasPrefix(data, "attime:") {
 		if sess := b.getSession(cb.From.ID); sess != nil {
 			t.clearButtons(cb)

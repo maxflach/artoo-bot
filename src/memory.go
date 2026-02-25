@@ -299,6 +299,48 @@ func (m *MemoryStore) setWorkspaceModel(userID int64, workspace, model string) e
 
 // --- Files ---
 
+// File holds metadata for a file created in a workspace.
+type File struct {
+	ID        int64
+	UserID    int64
+	Workspace string
+	Filename  string
+	Path      string
+	Size      int64
+	CreatedAt time.Time
+}
+
+// listFilesForUser returns structured file records for a user+workspace (most recent 50).
+func (m *MemoryStore) listFilesForUser(userID int64, workspace string) ([]File, error) {
+	rows, err := m.db.Query(
+		"SELECT id, user_id, workspace, filename, path, size, created_at FROM files WHERE user_id = ? AND workspace = ? ORDER BY created_at DESC LIMIT 50",
+		userID, workspace,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var files []File
+	for rows.Next() {
+		var f File
+		if err := rows.Scan(&f.ID, &f.UserID, &f.Workspace, &f.Filename, &f.Path, &f.Size, &f.CreatedAt); err != nil {
+			continue
+		}
+		files = append(files, f)
+	}
+	return files, rows.Err()
+}
+
+// fileByID returns a single file record by ID, scoped to the given user.
+func (m *MemoryStore) fileByID(userID, id int64) (File, error) {
+	var f File
+	err := m.db.QueryRow(
+		"SELECT id, user_id, workspace, filename, path, size, created_at FROM files WHERE id = ? AND user_id = ?",
+		id, userID,
+	).Scan(&f.ID, &f.UserID, &f.Workspace, &f.Filename, &f.Path, &f.Size, &f.CreatedAt)
+	return f, err
+}
+
 func (m *MemoryStore) recordFile(userID int64, workspace, filename, path string, size int64) {
 	m.db.Exec(
 		"INSERT INTO files (user_id, workspace, filename, path, size) VALUES (?, ?, ?, ?, ?)",

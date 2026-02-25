@@ -88,7 +88,9 @@ Any CLI that accepts a prompt and returns text output can work — configure it 
 **Web chat** (optional):
 - Set `webchat.enabled: true` in config and make sure `api.port` is non-zero
 - Navigate to `http://<host>:<port>/chat` — a login screen prompts for an API key (stored in `localStorage`)
-- Full React UI: project sidebar, per-project message history that survives reloads, bot replies rendered as markdown
+- Full React UI: project sidebar, per-project message history, bot replies rendered as markdown
+- **📁 Files** button — file browser for the current project; text files (`.md`, `.json`, `.go`, etc.) open in an editable textarea with a Save button; binary files offer a download link
+- **⏰ Schedules** button — manage scheduled tasks for the current project: view, delete, and add new recurring or one-off schedules with quick-fill time chips
 - Works great over Tailscale
 
 ---
@@ -248,12 +250,14 @@ Send any plain text message — it goes straight to your configured agentic CLI,
 | `/memory` | Show recent memories for the current project |
 | `/remember <fact>` | Save a fact to the current project memory |
 | `/remember --global <fact>` | Save to global memory (shared across all projects) |
-| `/files` | List recently created files |
+| `/files` | List files in the current project — each with a **Download** button |
 | `/model` | Show the active model |
 | `/model <name>` | Switch model for this session |
 | `/model <name> --save` | Persist model for the current project |
-| `/at <time> \| <prompt>` | One-off reminder (`tomorrow 18:00`, `friday 09:00`, `in 2h`) |
+| `/at <time> \| <prompt>` | One-off reminder — time picker buttons shown if time is omitted |
+| `/at` | Opens a time-picker grid (in 30 min / 1h / 2h, today, tomorrow) |
 | `/schedule <name> \| <when> \| <prompt>` | Recurring scheduled task |
+| `/schedule` | Opens a recurrence wizard (button grids for pattern + time) |
 | `/schedules` | List your scheduled tasks (with remove buttons) |
 | `/unschedule <id>` | Remove a scheduled task |
 | `/skills` | Button menu — tap any skill to run it |
@@ -339,14 +343,23 @@ Memory is loaded from the owner's project context. New memories written during t
 
 ### Scheduling
 
-Natural language scheduling that converts to cron:
+Natural language scheduling that converts to cron. You can type the full command or use the interactive button wizard:
 
+**Full syntax (always works):**
 ```
-/schedule digest | every day 08:00 | Search for sync industry news and update data.json
+/schedule digest | every day 08:00 | Search for industry news and update data.json
 /schedule standup | every weekday 09:00 | What should I focus on today?
 /at in 2h | remind me to review the report
 /at friday 14:00 | send me a summary of the week
 ```
+
+**Button wizard (Telegram):**
+- `/at` → time-picker grid (in 30 min / 1h / 2h, upcoming today, tomorrow) → bot asks for task
+- `/at | my task` → time-picker grid → schedules immediately on tap
+- `/schedule` → recurrence picker → optional time picker → bot asks for task
+- `/schedule myname | every weekday 09:00` → bot asks for task only
+
+**Web chat:** click **⏰ Schedules** in the sidebar to manage schedules for the current project — view, add, and delete without leaving the chat.
 
 Schedules survive reboots. One-off reminders (`/at`) delete themselves after firing.
 

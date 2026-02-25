@@ -1,5 +1,45 @@
 # Changelog
 
+## v0.16 — 2026-02-25
+
+### Added
+- **Telegram schedule wizard** — `/at` and `/schedule` now show inline button grids when no time is provided, making it easy to set up reminders and recurring tasks without typing cron syntax:
+  - `/at` → quick-pick time grid (in 30 min / 1h / 2h, upcoming today, tomorrow options); bot then asks for the task prompt via your next message
+  - `/at | my task` → shows time picker and schedules immediately on tap (prompt pre-supplied)
+  - `/schedule` → recurrence picker (every morning/noon/evening/night, daily/weekday/weekend with time sub-step, hourly options, individual weekday buttons); bot then asks for the task prompt
+  - `/schedule name | every day 08:00` → skips to the prompt step
+  - Full text syntax (`/at tomorrow 18:00 | prompt`) still works unchanged
+- **Webchat schedule dialog** — click **⏰ Schedules** in the sidebar footer to open a modal with two tabs:
+  - *Scheduled tasks* — lists schedules for the current project with name, cron expression, prompt, last run; inline delete; toggle to show all projects
+  - *Add new* — form with recurring/one-off toggle, name (optional), when field with quick-fill example chips, and task prompt
+  - Shows "Will run in project: X" so context is always clear
+- **Webchat file browser** — click **📁 Files** in the sidebar footer to open the file browser dialog:
+  - Two-pane layout: file list on the left, content viewer on the right
+  - Text files (`.md`, `.txt`, `.json`, `.yaml`, `.go`, `.py`, `.sh`, etc.) open in a full editable textarea; save button writes changes back to disk
+  - Binary files (PDFs, images) show a download prompt
+  - Every file has a Download link in the toolbar
+  - Project-scoped — shows files for the current active project
+- **Telegram `/files` download buttons** — each file is now shown as its own message with a `📥 Download` button; tapping it sends the file directly (images as photos, others as documents). Falls back to plain text list on transports without button support.
+- **`SendGrid` on `RichTransport`** — new interface method for flexible multi-row button layouts; implemented for Telegram. Used by schedule wizard and time picker.
+- **`currentProjectAtom`** — Jotai atom tracking the active project, synced from the URL in `Layout`; used by both `ScheduleDialog` and `FilesDialog` so they don't need to depend on `useParams`.
+- **New API endpoints:**
+  - `GET /chat/schedules` — list schedules for the current session workspace
+  - `POST /chat/schedules` — create a schedule (recurring or one-off) in the current project
+  - `DELETE /chat/schedules/{id}` — delete a schedule
+  - `GET /chat/files` — list files for the current session workspace
+  - `GET /chat/files/{id}/content` — read a text file's content
+  - `PUT /chat/files/{id}/content` — write updated content back to disk
+  - `GET /chat/files/{id}` — raw file download
+
+### Changed
+- **`/at` and `/schedule` command cases** — no longer return a usage string on empty args; instead delegate to the handler which starts the wizard or falls back to text usage on transports without button support
+- **`handleFileList()`** — replaces the inline `b.mem.listFiles()` call in the `/files` case; uses the new structured `listFilesForUser()` for button support
+
+### Internal
+- **`File` struct + `listFilesForUser()` + `fileByID()`** — new structured file query functions in `memory.go`, alongside the existing `recordFile()` / `listFiles()` string formatter
+- **`ScheduleWizard` struct + `scheduleWizard` field on `Session`** — wizard state for multi-step `/at` and `/schedule` flows; cleared on completion or wizard prompt intercept
+- **`handleScheduleWizardPrompt()`** — completes wizard scheduling when the user sends the task prompt text
+
 ## v0.15 — 2026-02-24
 
 ### Added

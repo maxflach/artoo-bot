@@ -19,13 +19,13 @@ function genID() {
 function ThinkingDots() {
   return (
     <div className="flex items-start gap-2.5">
-      <div className="w-7 h-7 rounded-full overflow-hidden shrink-0 ring-1 ring-white/10">
+      <div className="w-7 h-7 rounded-full overflow-hidden shrink-0 ring-1 ring-gray-200 dark:ring-white/10">
         <img src="/chat/avatar.png" alt="bot" className="w-full h-full object-cover" />
       </div>
-      <div className="flex items-center gap-1.5 px-4 py-3 bg-zinc-900 border border-white/8 rounded-2xl rounded-tl-sm shadow-sm">
-        <span className="thinking-dot w-1.5 h-1.5 bg-zinc-500 rounded-full" style={{ animationDelay: '0ms' }} />
-        <span className="thinking-dot w-1.5 h-1.5 bg-zinc-500 rounded-full" style={{ animationDelay: '200ms' }} />
-        <span className="thinking-dot w-1.5 h-1.5 bg-zinc-500 rounded-full" style={{ animationDelay: '400ms' }} />
+      <div className="flex items-center gap-1.5 px-4 py-3 bg-white dark:bg-zinc-900 border border-gray-200 dark:border-white/8 rounded-2xl rounded-tl-sm shadow-sm">
+        <span className="thinking-dot w-1.5 h-1.5 bg-gray-300 dark:bg-zinc-500 rounded-full" style={{ animationDelay: '0ms' }} />
+        <span className="thinking-dot w-1.5 h-1.5 bg-gray-300 dark:bg-zinc-500 rounded-full" style={{ animationDelay: '200ms' }} />
+        <span className="thinking-dot w-1.5 h-1.5 bg-gray-300 dark:bg-zinc-500 rounded-full" style={{ animationDelay: '400ms' }} />
       </div>
     </div>
   )
@@ -127,7 +127,6 @@ export default function ChatPane() {
 
   const canSend = Boolean(sessionID && input.trim() && !working)
 
-  // Status text
   const statusText = working
     ? 'Working…'
     : connected
@@ -136,19 +135,23 @@ export default function ChatPane() {
     ? 'Disconnected — reload to reconnect'
     : 'Connecting…'
 
+  const statusColor = working
+    ? 'text-blue-500 dark:text-blue-400'
+    : everConnected && !connected
+    ? 'text-red-500 dark:text-red-400'
+    : 'text-gray-400 dark:text-zinc-500'
+
   return (
-    <div className="flex flex-col flex-1 min-w-0 bg-zinc-950">
+    <div className="flex flex-col flex-1 min-w-0 bg-gray-50 dark:bg-zinc-950">
       {/* Header */}
-      <div className="px-5 py-3 border-b border-white/5 bg-zinc-900/50 flex items-center gap-3 shrink-0">
+      <div className="px-5 py-3 border-b border-gray-200 dark:border-white/5 bg-white/80 dark:bg-zinc-900/50 flex items-center gap-3 shrink-0">
         <div className="flex-1 min-w-0">
-          <h2 className="text-sm font-semibold text-zinc-200 truncate">{decodedProject}</h2>
+          <h2 className="text-sm font-semibold text-gray-900 dark:text-zinc-200 truncate">{decodedProject}</h2>
           {statusText && (
-            <p className={`text-xs mt-0.5 ${working ? 'text-blue-400' : connected ? 'text-zinc-500' : everConnected ? 'text-red-400' : 'text-zinc-500'}`}>
-              {statusText}
-            </p>
+            <p className={`text-xs mt-0.5 ${statusColor}`}>{statusText}</p>
           )}
         </div>
-        <div className={`w-2 h-2 rounded-full shrink-0 transition-colors ${connected ? 'bg-green-400' : 'bg-zinc-700'}`} />
+        <div className={`w-2 h-2 rounded-full shrink-0 transition-colors ${connected ? 'bg-green-400' : 'bg-gray-300 dark:bg-zinc-700'}`} />
       </div>
 
       {/* Messages */}
@@ -160,8 +163,8 @@ export default function ChatPane() {
               <img src="/chat/avatar.png" alt="Artoo" className="relative w-12 h-12 rounded-full object-cover opacity-70" />
             </div>
             <div>
-              <p className="text-zinc-400 text-sm font-medium">How can I help?</p>
-              <p className="text-zinc-600 text-xs mt-1">{decodedProject}</p>
+              <p className="text-gray-500 dark:text-zinc-400 text-sm font-medium">How can I help?</p>
+              <p className="text-gray-400 dark:text-zinc-600 text-xs mt-1">{decodedProject}</p>
             </div>
           </div>
         )}
@@ -173,8 +176,8 @@ export default function ChatPane() {
       </div>
 
       {/* Input */}
-      <div className="px-4 py-4 border-t border-white/5 bg-zinc-900/50 shrink-0">
-        <div className="flex gap-2 items-end bg-zinc-900 border border-white/8 rounded-2xl px-3 py-2 shadow-lg focus-within:border-blue-500/40 focus-within:ring-1 focus-within:ring-blue-500/10 transition-all">
+      <div className="px-4 py-4 border-t border-gray-200 dark:border-white/5 bg-white/80 dark:bg-zinc-900/50 shrink-0">
+        <div className="flex gap-2 items-end bg-white dark:bg-zinc-900 border border-gray-200 dark:border-white/8 rounded-2xl px-3 py-2 shadow-sm focus-within:border-blue-400 dark:focus-within:border-blue-500/40 focus-within:ring-2 focus-within:ring-blue-500/10 transition-all">
           <textarea
             ref={textareaRef}
             value={input}
@@ -182,17 +185,17 @@ export default function ChatPane() {
             onKeyDown={handleKeyDown}
             placeholder={`Message ${decodedProject}…`}
             rows={1}
-            className="flex-1 bg-transparent text-sm resize-none outline-none text-zinc-100 placeholder-zinc-600 min-h-[28px] max-h-40 py-1"
+            className="flex-1 bg-transparent text-sm resize-none outline-none text-gray-900 dark:text-zinc-100 placeholder-gray-400 dark:placeholder-zinc-600 min-h-[28px] max-h-40 py-1"
           />
           <button
             onClick={handleSend}
             disabled={!canSend}
-            className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-800 disabled:text-zinc-600 text-white rounded-xl text-xs font-semibold transition-all shrink-0 self-end"
+            className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-100 dark:disabled:bg-zinc-800 disabled:text-gray-400 dark:disabled:text-zinc-600 text-white rounded-xl text-xs font-semibold transition-all shrink-0 self-end"
           >
             Send
           </button>
         </div>
-        <p className="text-center text-[10px] text-zinc-700 mt-2">Enter to send · Shift+Enter for newline</p>
+        <p className="text-center text-[10px] text-gray-300 dark:text-zinc-700 mt-2">Enter to send · Shift+Enter for newline</p>
       </div>
     </div>
   )

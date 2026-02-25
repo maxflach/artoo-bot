@@ -18,11 +18,11 @@ export default function Message({ message }: Props) {
         onMouseLeave={() => setShowTime(false)}
       >
         <div className="relative max-w-[78%]">
-          <div className="bg-blue-600 text-white px-4 py-2.5 rounded-2xl rounded-tr-sm text-sm whitespace-pre-wrap shadow-md shadow-blue-950/40">
+          <div className="bg-blue-600 text-white px-4 py-2.5 rounded-2xl rounded-tr-sm text-sm whitespace-pre-wrap shadow-md shadow-blue-900/20 dark:shadow-blue-950/40">
             {message.text}
           </div>
           {showTime && (
-            <div className="absolute right-0 -bottom-5 text-[10px] text-zinc-600 whitespace-nowrap">
+            <div className="absolute right-0 -bottom-5 text-[10px] text-gray-400 dark:text-zinc-600 whitespace-nowrap">
               {time}
             </div>
           )}
@@ -37,15 +37,15 @@ export default function Message({ message }: Props) {
       onMouseEnter={() => setShowTime(true)}
       onMouseLeave={() => setShowTime(false)}
     >
-      <div className="w-7 h-7 rounded-full overflow-hidden shrink-0 mt-0.5 ring-1 ring-white/10">
+      <div className="w-7 h-7 rounded-full overflow-hidden shrink-0 mt-0.5 ring-1 ring-gray-200 dark:ring-white/10">
         <img src="/chat/avatar.png" alt="bot" className="w-full h-full object-cover" />
       </div>
-      <div className="relative max-w-[78%] bg-zinc-900 border border-white/8 px-4 py-2.5 rounded-2xl rounded-tl-sm text-sm shadow-sm">
-        <div className="prose prose-sm prose-invert max-w-none">
+      <div className="relative max-w-[78%] bg-white dark:bg-zinc-900 border border-gray-200 dark:border-white/8 px-4 py-2.5 rounded-2xl rounded-tl-sm text-sm shadow-sm">
+        <div className="prose prose-sm dark:prose-invert max-w-none">
           <ReactMarkdown>{message.text}</ReactMarkdown>
         </div>
         {showTime && (
-          <div className="absolute left-0 -bottom-5 text-[10px] text-zinc-600 whitespace-nowrap">
+          <div className="absolute left-0 -bottom-5 text-[10px] text-gray-400 dark:text-zinc-600 whitespace-nowrap">
             {time}
           </div>
         )}

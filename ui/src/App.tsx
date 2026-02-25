@@ -1,7 +1,7 @@
 import { useAtomValue, useSetAtom } from 'jotai'
 import { useEffect } from 'react'
 import { HashRouter, Routes, Route, Navigate, useParams } from 'react-router-dom'
-import { apiKeyAtom, currentProjectAtom } from './atoms'
+import { apiKeyAtom, currentProjectAtom, themeAtom } from './atoms'
 import Login from './components/Login'
 import Sidebar from './components/Sidebar'
 import ChatPane from './components/ChatPane'
@@ -17,7 +17,7 @@ function Layout() {
   }, [rawProject, setCurrentProject])
 
   return (
-    <div className="flex h-screen bg-zinc-950 text-zinc-100 overflow-hidden">
+    <div className="flex h-screen bg-gray-50 dark:bg-zinc-950 text-gray-900 dark:text-zinc-100 overflow-hidden transition-colors">
       <Sidebar />
       <ChatPane />
       <ScheduleDialog />
@@ -28,6 +28,11 @@ function Layout() {
 
 export default function App() {
   const apiKey = useAtomValue(apiKeyAtom)
+  const theme = useAtomValue(themeAtom)
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', theme === 'dark')
+  }, [theme])
 
   if (!apiKey) return <Login />
 

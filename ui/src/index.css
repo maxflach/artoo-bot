@@ -1,5 +1,8 @@
 @import "tailwindcss";
 
+/* Class-based dark mode: applies dark: utilities when .dark is on any ancestor */
+@variant dark (&:where(.dark, .dark *));
+
 /* Thin scrollbars */
 * {
   scrollbar-width: thin;

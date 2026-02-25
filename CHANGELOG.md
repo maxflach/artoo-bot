@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.18 — 2026-02-25
+
+### Added
+- **Dark/light mode toggle** — sun/moon button in the sidebar header switches between dark and light mode; preference is persisted to `localStorage` and survives reloads. Defaults to dark.
+- All webchat components updated with full light/dark variants: sidebar, chat pane, messages, login, schedule dialog, file dialog.
+
+### Internal
+- Tailwind v4 class-based dark mode via `@variant dark (&:where(.dark, .dark *))` in `index.css`; `<html>` starts with `.dark` class to prevent flash on first load.
+- New `themeAtom` (`atomWithStorage`) in `atoms.ts`; `App` applies/removes `.dark` on `document.documentElement` on change.
+
 ## v0.17 — 2026-02-25
 
 ### Changed

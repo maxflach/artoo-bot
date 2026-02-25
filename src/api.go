@@ -95,8 +95,7 @@ func (b *Bot) requireAPIKey(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		raw := strings.TrimPrefix(auth, "Bearer ")
-		hash := hashKey(raw)
-		if !b.mem.lookupAPIKey(hash) {
+		if !b.mem.lookupAPIKey(hashKey(raw)) {
 			apiError(w, http.StatusUnauthorized, "invalid API key")
 			return
 		}

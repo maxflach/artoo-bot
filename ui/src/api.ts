@@ -127,6 +127,26 @@ export async function saveFileContent(key: string, id: number, content: string):
   if (!r.ok) throw new Error(`${r.status}`)
 }
 
-export function fileDownloadURL(id: number): string {
-  return `/chat/files/${id}`
+export async function deleteFile(key: string, id: number): Promise<void> {
+  const r = await fetch(`/chat/files/${id}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${key}` },
+  })
+  if (!r.ok) throw new Error(`${r.status}`)
+}
+
+export async function downloadFile(key: string, id: number, filename: string): Promise<void> {
+  const r = await fetch(`/chat/files/${id}`, {
+    headers: { Authorization: `Bearer ${key}` },
+  })
+  if (!r.ok) throw new Error(`${r.status}`)
+  const blob = await r.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
 }

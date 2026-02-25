@@ -708,19 +708,27 @@ func (wc *WebChatTransport) handleFileByID(w http.ResponseWriter, r *http.Reques
 		}
 
 	default:
-		// /chat/files/{id} — serve the raw file as a download.
-		if r.Method != http.MethodGet {
-			apiError(w, http.StatusMethodNotAllowed, "GET only")
-			return
+		switch r.Method {
+		case http.MethodGet:
+			// /chat/files/{id} — serve the raw file as a download.
+			fh, err := os.Open(f.Path)
+			if err != nil {
+				apiError(w, http.StatusNotFound, "file not accessible on disk")
+				return
+			}
+			defer fh.Close()
+			w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, f.Filename))
+			w.Header().Set("Content-Type", "application/octet-stream")
+			io.Copy(w, fh)
+		case http.MethodDelete:
+			// /chat/files/{id} — delete the DB record (leaves disk file untouched).
+			if err := wc.bot.mem.deleteFile(userID, id); err != nil {
+				apiError(w, http.StatusInternalServerError, "delete failed")
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			apiError(w, http.StatusMethodNotAllowed, "GET or DELETE only")
 		}
-		fh, err := os.Open(f.Path)
-		if err != nil {
-			apiError(w, http.StatusNotFound, "file not accessible on disk")
-			return
-		}
-		defer fh.Close()
-		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, f.Filename))
-		w.Header().Set("Content-Type", "application/octet-stream")
-		io.Copy(w, fh)
 	}
 }

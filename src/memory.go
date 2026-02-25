@@ -342,6 +342,11 @@ func (m *MemoryStore) fileByID(userID, id int64) (File, error) {
 	return f, err
 }
 
+func (m *MemoryStore) deleteFile(userID, id int64) error {
+	_, err := m.db.Exec("DELETE FROM files WHERE id = ? AND user_id = ?", id, userID)
+	return err
+}
+
 func (m *MemoryStore) recordFile(userID int64, workspace, filename, path string, size int64) {
 	m.db.Exec(
 		`INSERT INTO files (user_id, workspace, filename, path, size)

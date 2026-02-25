@@ -1631,6 +1631,7 @@ func (b *Bot) handleFileList(chatID string, sess *Session, workspace string) {
 		if hasButtons {
 			rt.SendWithButtons(localChatID, text, []Button{
 				{Label: "📥 Download", Data: fmt.Sprintf("sendfile:%d", f.ID)},
+				{Label: "🗑 Delete", Data: fmt.Sprintf("delfile:%d", f.ID)},
 			})
 		} else {
 			b.reply(chatID, text)

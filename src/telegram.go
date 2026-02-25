@@ -330,6 +330,56 @@ func (t *TelegramTransport) handleCallback(cb *tgbotapi.CallbackQuery) {
 		}
 		return
 	}
+	if strings.HasPrefix(data, "delfile:") {
+		var fileID int64
+		fmt.Sscanf(strings.TrimPrefix(data, "delfile:"), "%d", &fileID)
+		if sess := b.getSession(cb.From.ID); sess != nil {
+			f, err := b.mem.fileByID(sess.userID, fileID)
+			if err != nil {
+				t.api.Request(tgbotapi.NewCallback(cb.ID, "File not found"))
+				return
+			}
+			t.api.Request(tgbotapi.NewCallback(cb.ID, ""))
+			chatInt := cb.From.ID
+			if cb.Message != nil {
+				chatInt = cb.Message.Chat.ID
+			}
+			msg := tgbotapi.NewMessage(chatInt, fmt.Sprintf("Delete *%s*?", f.Filename))
+			msg.ParseMode = "Markdown"
+			msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
+				tgbotapi.NewInlineKeyboardRow(
+					tgbotapi.NewInlineKeyboardButtonData("✅ Yes, delete", fmt.Sprintf("delfileok:%d", fileID)),
+					tgbotapi.NewInlineKeyboardButtonData("❌ Cancel", "delfilecancel"),
+				),
+			)
+			t.api.Send(msg)
+		}
+		return
+	}
+	if strings.HasPrefix(data, "delfileok:") {
+		var fileID int64
+		fmt.Sscanf(strings.TrimPrefix(data, "delfileok:"), "%d", &fileID)
+		if sess := b.getSession(cb.From.ID); sess != nil {
+			if err := b.mem.deleteFile(sess.userID, fileID); err != nil {
+				t.api.Request(tgbotapi.NewCallback(cb.ID, "Delete failed"))
+				return
+			}
+			t.api.Request(tgbotapi.NewCallback(cb.ID, "Deleted"))
+			if cb.Message != nil {
+				edit := tgbotapi.NewEditMessageText(cb.Message.Chat.ID, cb.Message.MessageID, "🗑 Deleted")
+				t.api.Request(edit)
+			}
+		}
+		return
+	}
+	if data == "delfilecancel" {
+		t.api.Request(tgbotapi.NewCallback(cb.ID, "Cancelled"))
+		if cb.Message != nil {
+			edit := tgbotapi.NewEditMessageText(cb.Message.Chat.ID, cb.Message.MessageID, "Cancelled")
+			t.api.Request(edit)
+		}
+		return
+	}
 	if strings.HasPrefix(data, "attime:") {
 		if sess := b.getSession(cb.From.ID); sess != nil {
 			t.clearButtons(cb)

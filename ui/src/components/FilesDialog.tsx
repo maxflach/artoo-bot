@@ -1,11 +1,12 @@
 import { useAtom, useAtomValue } from 'jotai'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { apiKeyAtom, currentProjectAtom, filesDialogOpenAtom } from '../atoms'
 import {
   fetchFiles,
   fetchFileContent,
   saveFileContent,
-  fileDownloadURL,
+  downloadFile,
+  deleteFile,
   type ProjectFile,
 } from '../api'
 
@@ -27,9 +28,15 @@ function formatAge(iso: string): string {
   return `${Math.floor(diffHours / 24)}d ago`
 }
 
+const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg']
+
+function isImage(filename: string): boolean {
+  return IMAGE_EXTS.includes(filename.split('.').pop()?.toLowerCase() ?? '')
+}
+
 function fileIcon(filename: string): string {
   const ext = filename.split('.').pop()?.toLowerCase() ?? ''
-  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)) return '🖼'
+  if (IMAGE_EXTS.includes(ext)) return '🖼'
   if (['pdf'].includes(ext)) return '📕'
   if (['md', 'txt'].includes(ext)) return '📝'
   if (['json', 'yaml', 'yml', 'toml', 'xml'].includes(ext)) return '⚙️'
@@ -55,8 +62,16 @@ export default function FilesDialog() {
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [savedOk, setSavedOk] = useState(false)
+  const [imageSrc, setImageSrc] = useState<string | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [deleting, setDeleting] = useState(false)
 
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  // Revoke blob URL when switching files or closing
+  const clearImageSrc = useCallback(() => {
+    setImageSrc(prev => { if (prev) URL.revokeObjectURL(prev); return null })
+  }, [])
 
   const load = () => {
     setLoading(true)
@@ -73,16 +88,45 @@ export default function FilesDialog() {
       setSelected(null)
       setContent('')
       setEdited(false)
+      clearImageSrc()
     }
   }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  async function handleDelete() {
+    if (!selected) return
+    setDeleting(true)
+    try {
+      await deleteFile(apiKey, selected.id)
+      setFiles(prev => prev.filter(f => f.id !== selected.id))
+      setSelected(null)
+      setConfirmDelete(false)
+      clearImageSrc()
+    } catch (e) {
+      setSaveError(String(e))
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   async function selectFile(f: ProjectFile) {
+    clearImageSrc()
     setSelected(f)
     setEdited(false)
     setSaveError(null)
     setSavedOk(false)
+    setConfirmDelete(false)
     if (!f.is_text) {
       setContent('')
+      // Load image preview
+      if (isImage(f.filename)) {
+        try {
+          const r = await fetch(`/chat/files/${f.id}`, { headers: { Authorization: `Bearer ${apiKey}` } })
+          if (r.ok) {
+            const blob = await r.blob()
+            setImageSrc(URL.createObjectURL(blob))
+          }
+        } catch { /* preview fails silently */ }
+      }
       return
     }
     setContentLoading(true)
@@ -205,13 +249,38 @@ export default function FilesDialog() {
                         </button>
                       </>
                     )}
-                    <a
-                      href={fileDownloadURL(selected.id)}
-                      download={selected.filename}
+                    <button
+                      onClick={() => downloadFile(apiKey, selected.id, selected.filename)}
                       className="px-3 py-1 text-xs bg-gray-100 dark:bg-zinc-700 hover:bg-gray-200 dark:hover:bg-zinc-600 text-gray-700 dark:text-zinc-200 rounded transition-colors"
                     >
                       Download
-                    </a>
+                    </button>
+                    {confirmDelete ? (
+                      <>
+                        <span className="text-xs text-gray-500 dark:text-zinc-400">Delete?</span>
+                        <button
+                          onClick={handleDelete}
+                          disabled={deleting}
+                          className="px-3 py-1 text-xs bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white rounded transition-colors"
+                        >
+                          {deleting ? '…' : 'Yes'}
+                        </button>
+                        <button
+                          onClick={() => setConfirmDelete(false)}
+                          className="px-3 py-1 text-xs bg-gray-100 dark:bg-zinc-700 hover:bg-gray-200 dark:hover:bg-zinc-600 text-gray-700 dark:text-zinc-200 rounded transition-colors"
+                        >
+                          No
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        onClick={() => setConfirmDelete(true)}
+                        className="px-3 py-1 text-xs text-gray-400 dark:text-zinc-500 hover:text-red-500 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 rounded transition-colors"
+                        title="Delete file"
+                      >
+                        🗑
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -233,16 +302,25 @@ export default function FilesDialog() {
                     />
                   )}
                   {!contentLoading && !contentError && !selected.is_text && (
-                    <div className="p-6 flex flex-col items-center justify-center gap-3 text-center">
-                      <span className="text-4xl">{fileIcon(selected.filename)}</span>
-                      <p className="text-sm text-gray-500 dark:text-zinc-400">Binary file — not viewable as text.</p>
-                      <a
-                        href={fileDownloadURL(selected.id)}
-                        download={selected.filename}
-                        className="px-4 py-2 text-sm bg-gray-100 dark:bg-zinc-700 hover:bg-gray-200 dark:hover:bg-zinc-600 text-gray-700 dark:text-zinc-200 rounded-lg transition-colors"
-                      >
-                        Download {selected.filename}
-                      </a>
+                    <div className="flex-1 flex flex-col items-center justify-center gap-3 p-4">
+                      {imageSrc ? (
+                        <img
+                          src={imageSrc}
+                          alt={selected.filename}
+                          className="max-w-full max-h-full object-contain rounded-lg shadow-sm"
+                        />
+                      ) : (
+                        <>
+                          <span className="text-4xl">{fileIcon(selected.filename)}</span>
+                          <p className="text-sm text-gray-500 dark:text-zinc-400">Binary file — not viewable as text.</p>
+                          <button
+                            onClick={() => downloadFile(apiKey, selected.id, selected.filename)}
+                            className="px-4 py-2 text-sm bg-gray-100 dark:bg-zinc-700 hover:bg-gray-200 dark:hover:bg-zinc-600 text-gray-700 dark:text-zinc-200 rounded-lg transition-colors"
+                          >
+                            Download {selected.filename}
+                          </button>
+                        </>
+                      )}
                     </div>
                   )}
                 </div>

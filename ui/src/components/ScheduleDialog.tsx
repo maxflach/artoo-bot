@@ -1,6 +1,6 @@
 import { useAtom, useAtomValue } from 'jotai'
 import { useEffect, useState } from 'react'
-import { apiKeyAtom, scheduleDialogOpenAtom } from '../atoms'
+import { apiKeyAtom, currentProjectAtom, scheduleDialogOpenAtom } from '../atoms'
 import {
   fetchSchedules,
   createSchedule,
@@ -21,6 +21,12 @@ function formatLastRun(lastRun: string | null): string {
   return `${Math.floor(diffHours / 24)}d ago`
 }
 
+function matchesProject(s: Schedule, project: string): boolean {
+  const ws = s.workspace ?? ''
+  if (project === 'global') return ws === 'global' || ws === ''
+  return ws === project
+}
+
 const WHEN_EXAMPLES = [
   'every morning',
   'every day 09:00',
@@ -35,11 +41,13 @@ const WHEN_EXAMPLES = [
 export default function ScheduleDialog() {
   const [open, setOpen] = useAtom(scheduleDialogOpenAtom)
   const apiKey = useAtomValue(apiKeyAtom)
+  const currentProject = useAtomValue(currentProjectAtom)
 
   const [schedules, setSchedules] = useState<Schedule[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [tab, setTab] = useState<'list' | 'add'>('list')
+  const [showAll, setShowAll] = useState(false)
 
   // Add-form state
   const [name, setName] = useState('')
@@ -63,8 +71,13 @@ export default function ScheduleDialog() {
     if (open) {
       load()
       setTab('list')
+      setShowAll(false)
     }
   }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const projectSchedules = schedules.filter(s => matchesProject(s, currentProject))
+  const otherSchedules = schedules.filter(s => !matchesProject(s, currentProject))
+  const visibleSchedules = showAll ? schedules : projectSchedules
 
   async function handleDelete(id: number) {
     setDeletingId(id)
@@ -108,7 +121,10 @@ export default function ScheduleDialog() {
       <div className="bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl w-full max-w-lg mx-4 flex flex-col max-h-[80vh]">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-700 shrink-0">
-          <h2 className="text-base font-semibold text-zinc-100">Schedules</h2>
+          <div>
+            <h2 className="text-base font-semibold text-zinc-100">Schedules</h2>
+            <p className="text-xs text-zinc-500 mt-0.5">Project: <span className="text-zinc-300">{currentProject}</span></p>
+          </div>
           <button
             onClick={() => setOpen(false)}
             className="text-zinc-500 hover:text-zinc-300 text-xl leading-none"
@@ -128,6 +144,9 @@ export default function ScheduleDialog() {
             }`}
           >
             Scheduled tasks
+            {projectSchedules.length > 0 && (
+              <span className="ml-1.5 text-xs text-zinc-500">{projectSchedules.length}</span>
+            )}
           </button>
           <button
             onClick={() => setTab('add')}
@@ -154,15 +173,15 @@ export default function ScheduleDialog() {
               {loading && (
                 <p className="text-sm text-zinc-500 text-center py-6">Loading...</p>
               )}
-              {!loading && schedules.length === 0 && !error && (
+              {!loading && projectSchedules.length === 0 && !error && (
                 <p className="text-sm text-zinc-500 text-center py-6">
-                  No schedules yet.{' '}
+                  No schedules for <span className="text-zinc-300">{currentProject}</span>.{' '}
                   <button onClick={() => setTab('add')} className="text-blue-400 hover:text-blue-300">
                     Add one
                   </button>
                 </p>
               )}
-              {schedules.map(s => (
+              {visibleSchedules.map(s => (
                 <div
                   key={s.id}
                   className="bg-zinc-800 border border-zinc-700 rounded-lg p-3 flex flex-col gap-1"
@@ -173,6 +192,11 @@ export default function ScheduleDialog() {
                         {s.one_shot ? '⏰' : s.enabled ? '✅' : '⏸'}
                       </span>
                       <span className="text-sm font-medium text-zinc-100 truncate">{s.name}</span>
+                      {showAll && !matchesProject(s, currentProject) && (
+                        <span className="text-xs text-zinc-500 shrink-0 bg-zinc-700 px-1.5 py-0.5 rounded">
+                          {s.workspace || 'global'}
+                        </span>
+                      )}
                     </div>
                     <button
                       onClick={() => handleDelete(s.id)}
@@ -185,19 +209,29 @@ export default function ScheduleDialog() {
                   </div>
                   <code className="text-xs text-blue-300 font-mono">{s.schedule}</code>
                   <p className="text-xs text-zinc-400 line-clamp-2">{s.prompt}</p>
-                  <div className="flex items-center gap-3 text-xs text-zinc-600 mt-0.5">
-                    {s.workspace && s.workspace !== '' && (
-                      <span>project: {s.workspace}</span>
-                    )}
-                    <span>last run: {formatLastRun(s.last_run)}</span>
-                  </div>
+                  <span className="text-xs text-zinc-600">last run: {formatLastRun(s.last_run)}</span>
                 </div>
               ))}
+
+              {!loading && otherSchedules.length > 0 && (
+                <button
+                  onClick={() => setShowAll(v => !v)}
+                  className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors text-center pt-1"
+                >
+                  {showAll
+                    ? `Show only ${currentProject}`
+                    : `+ ${otherSchedules.length} schedule${otherSchedules.length === 1 ? '' : 's'} in other projects`}
+                </button>
+              )}
             </div>
           )}
 
           {tab === 'add' && (
             <form onSubmit={handleAdd} className="p-4 flex flex-col gap-4">
+              <div className="text-xs text-zinc-500 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2">
+                Will run in project: <span className="text-zinc-300 font-medium">{currentProject}</span>
+              </div>
+
               <div className="flex gap-4">
                 <label className="flex items-center gap-2 cursor-pointer text-sm text-zinc-300">
                   <input

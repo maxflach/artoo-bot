@@ -17,7 +17,7 @@ function Layout() {
   }, [rawProject, setCurrentProject])
 
   return (
-    <div className="flex h-screen bg-zinc-900 text-zinc-100 overflow-hidden">
+    <div className="flex h-screen bg-zinc-950 text-zinc-100 overflow-hidden">
       <Sidebar />
       <ChatPane />
       <ScheduleDialog />

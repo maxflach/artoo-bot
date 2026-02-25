@@ -109,6 +109,7 @@ func newMemoryStore() (*MemoryStore, error) {
 	db.Exec(`CREATE INDEX IF NOT EXISTS idx_memories_user   ON memories(user_id, workspace)`)
 	db.Exec(`CREATE INDEX IF NOT EXISTS idx_memories_ts     ON memories(created_at)`)
 	db.Exec(`CREATE INDEX IF NOT EXISTS idx_files_user      ON files(user_id, workspace)`)
+	db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_files_unique ON files(user_id, workspace, filename)`)
 	db.Exec(`CREATE INDEX IF NOT EXISTS idx_schedules_user  ON schedules(user_id)`)
 	db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_workspaces_user_name ON workspaces(user_id, name)`)
 
@@ -343,7 +344,9 @@ func (m *MemoryStore) fileByID(userID, id int64) (File, error) {
 
 func (m *MemoryStore) recordFile(userID int64, workspace, filename, path string, size int64) {
 	m.db.Exec(
-		"INSERT INTO files (user_id, workspace, filename, path, size) VALUES (?, ?, ?, ?, ?)",
+		`INSERT INTO files (user_id, workspace, filename, path, size)
+		 VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(user_id, workspace, filename) DO UPDATE SET path=excluded.path, size=excluded.size, created_at=CURRENT_TIMESTAMP`,
 		userID, workspace, filename, path, size,
 	)
 }

@@ -10,6 +10,8 @@ import (
 	"github.com/go-pdf/fpdf"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/extension"
+	extast "github.com/yuin/goldmark/extension/ast"
 	"github.com/yuin/goldmark/text"
 	"gopkg.in/yaml.v3"
 )
@@ -211,7 +213,9 @@ func extractStyledSpans(n ast.Node, source []byte) []styledSpan {
 		case *ast.Text:
 			if entering {
 				t := string(v.Segment.Value(source))
-				if v.SoftLineBreak() {
+				if v.HardLineBreak() {
+					t += "\n"
+				} else if v.SoftLineBreak() {
 					t += " "
 				}
 				if t != "" {
@@ -271,7 +275,7 @@ func RenderMarkdownReport(mdPath, outPath string, tmpl *ReportTemplate) error {
 		return fmt.Errorf("read %s: %w", mdPath, err)
 	}
 
-	md := goldmark.New()
+	md := goldmark.New(goldmark.WithExtensions(extension.Table))
 	reader := text.NewReader(source)
 	doc := md.Parser().Parse(reader)
 
@@ -431,6 +435,9 @@ func renderBodyNodes(pdf *fpdf.Fpdf, nodes []ast.Node, source []byte, tmpl *Repo
 			pdf.SetX(26)
 			pdf.MultiCell(162, lineH, qt, "L", "L", false)
 			pdf.Ln(2)
+
+		case *extast.Table:
+			renderTable(pdf, v, source, tmpl, fontSize, lineH)
 		}
 	}
 }
@@ -491,9 +498,71 @@ func renderParagraph(pdf *fpdf.Fpdf, n ast.Node, source []byte, tmpl *ReportTemp
 		default:
 			pdf.SetFont("Helvetica", "", fontSize)
 		}
-		pdf.Write(lineH, pdfText(span.text))
+		// Handle hard line breaks (\n embedded by extractStyledSpans for "  \n" in markdown)
+		parts := strings.SplitAfter(span.text, "\n")
+		for i, part := range parts {
+			part = strings.TrimRight(part, "\n")
+			if part != "" {
+				pdf.Write(lineH, pdfText(part))
+			}
+			if i < len(parts)-1 {
+				pdf.Ln(lineH)
+				pdf.SetX(20)
+			}
+		}
 	}
 	pdf.Ln(lineH + 2)
+}
+
+func renderTable(pdf *fpdf.Fpdf, table *extast.Table, source []byte, tmpl *ReportTemplate, fontSize, lineH float64) {
+	const tableWidth = 170.0
+	const leftMargin = 20.0
+	cellH := lineH + 2
+
+	// Count columns from the header row
+	numCols := 0
+	for child := table.FirstChild(); child != nil; child = child.NextSibling() {
+		if child.Kind() == extast.KindTableHeader {
+			for cell := child.FirstChild(); cell != nil; cell = cell.NextSibling() {
+				numCols++
+			}
+			break
+		}
+	}
+	if numCols == 0 {
+		return
+	}
+	colW := tableWidth / float64(numCols)
+
+	tr, tg, tb := hexToRGB(tmpl.Body.TextColor)
+	h2r, h2g, h2b := hexToRGB(tmpl.Body.H2Color)
+
+	pdf.Ln(3)
+	for child := table.FirstChild(); child != nil; child = child.NextSibling() {
+		switch child.Kind() {
+		case extast.KindTableHeader:
+			pdf.SetX(leftMargin)
+			for cell := child.FirstChild(); cell != nil; cell = cell.NextSibling() {
+				txt := pdfText(extractPlainText(cell, source))
+				pdf.SetFillColor(241, 245, 249)
+				pdf.SetTextColor(h2r, h2g, h2b)
+				pdf.SetFont("Helvetica", "B", fontSize-0.5)
+				pdf.CellFormat(colW, cellH, txt, "1", 0, "L", true, 0, "")
+			}
+			pdf.Ln(-1)
+		case extast.KindTableRow:
+			pdf.SetX(leftMargin)
+			for cell := child.FirstChild(); cell != nil; cell = cell.NextSibling() {
+				txt := pdfText(extractPlainText(cell, source))
+				pdf.SetFillColor(255, 255, 255)
+				pdf.SetTextColor(tr, tg, tb)
+				pdf.SetFont("Helvetica", "", fontSize-0.5)
+				pdf.CellFormat(colW, cellH, txt, "1", 0, "L", false, 0, "")
+			}
+			pdf.Ln(-1)
+		}
+	}
+	pdf.Ln(4)
 }
 
 func renderList(pdf *fpdf.Fpdf, list *ast.List, source []byte, tmpl *ReportTemplate, fontSize, lineH float64) {

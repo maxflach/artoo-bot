@@ -38,6 +38,7 @@ The app is a single Go binary with no subpackages. All source is in `src/`:
 | `memory.go` | SQLite store — memories, workspaces, files, schedules, users, api_keys tables |
 | `cron.go` | Cron runner wrapping robfig/cron; loads schedules from DB on start, supports one-shot jobs |
 | `timeat.go` | Natural language → cron expression parser ("tomorrow 18:00", "every weekday 09:00") |
+| `pdf.go` | Styled PDF renderer: markdown → A4 PDF via go-pdf/fpdf. Used bot-wide across all projects. |
 
 ## Key Concepts
 
@@ -74,6 +75,20 @@ The HTTP API is documented in `src/openapi.yaml` (embedded into the binary at bu
 **Rule: If you modify API endpoints in `api.go`, update `src/openapi.yaml` to match.**
 
 The spec is served at `/openapi.yaml` and browsable via Swagger UI at `/docs`.
+
+## PDF Report System
+
+`pdf.go` provides `RenderMarkdownReport(mdPath, outPath, tmpl)` — used bot-wide, not per-project.
+
+**Auto-render trigger**: any time a Claude Code session writes a file named exactly `report.md` to its working directory, the bot automatically renders it to PDF and sends it via Telegram. This is how all project reports work.
+
+**Encoding rule**: fpdf's built-in fonts (Helvetica, Courier) use single-byte Windows-1252 / Latin-1 encoding. All text passed to fpdf MUST go through `pdfText()`, which converts UTF-8 multi-byte characters to their Latin-1 byte equivalents. Without this, characters like ö/ä/å/Ö/Ä/Å render as garbage (e.g. ö → Ã¶). When adding new text rendering calls to `pdf.go`, always wrap strings with `pdfText()`.
+
+**Template**: visual styling (colors, header/footer text, logo) is controlled by `template.yaml`. Look-up order: `projectDir/template.yaml` → `userBaseDir/template.yaml` → `~/.config/bot/report-template/template.yaml` → hardcoded default (dark theme).
+
+**Cover page**: the first H1 in the markdown becomes the cover title. All subsequent content is rendered as the body starting on page 2.
+
+**Do not** introduce external PDF tools (pandoc, wkhtmltopdf, weasyprint) for report generation inside bot-managed workspaces — the bot handles it natively via `pdf.go`.
 
 ## Notes
 

@@ -136,21 +136,52 @@ func hexToRGB(hex string) (int, int, int) {
 }
 
 // pdfText converts a UTF-8 string to Windows-1252 so fpdf's built-in fonts
-// render typographic characters (em dash, curly quotes, ellipsis, etc.) correctly.
-var win1252 = strings.NewReplacer(
-	"\u2014", "\x97", // em dash —
-	"\u2013", "\x96", // en dash –
-	"\u2019", "\x92", // right single quote '
-	"\u2018", "\x91", // left single quote '
-	"\u201C", "\x93", // left double quote "
-	"\u201D", "\x94", // right double quote "
-	"\u2026", "\x85", // ellipsis …
-	"\u00A0", " ",    // non-breaking space
-	"\u2022", "\x95", // bullet •
-)
-
+// render characters correctly. fpdf built-in fonts (Helvetica, Courier) use
+// single-byte Latin-1/cp1252 encoding — passing raw UTF-8 multi-byte sequences
+// produces garbled output (e.g. ö → Ã¶).
+//
+// Conversion rules:
+//   - U+0000–U+007F: pass through as-is (ASCII)
+//   - U+0080–U+00FF: emit as single byte (Latin-1 range; covers ö ä å Ö Ä Å etc.)
+//   - cp1252-specific typographic chars (em dash, curly quotes, ellipsis, bullet):
+//     map to their Windows-1252 byte values (0x80–0x9F range)
+//   - Everything else (U+0100+): drop (not representable in cp1252)
 func pdfText(s string) string {
-	return win1252.Replace(s)
+	var buf strings.Builder
+	buf.Grow(len(s))
+	for _, r := range s {
+		switch r {
+		case '\u2014':
+			buf.WriteByte('\x97') // em dash —
+		case '\u2013':
+			buf.WriteByte('\x96') // en dash –
+		case '\u2019':
+			buf.WriteByte('\x92') // right single quote '
+		case '\u2018':
+			buf.WriteByte('\x91') // left single quote '
+		case '\u201C':
+			buf.WriteByte('\x93') // left double quote "
+		case '\u201D':
+			buf.WriteByte('\x94') // right double quote "
+		case '\u2026':
+			buf.WriteByte('\x85') // ellipsis …
+		case '\u00A0':
+			buf.WriteByte(' ') // non-breaking space
+		case '\u2022':
+			buf.WriteByte('\x95') // bullet •
+		default:
+			if r < 0x80 {
+				buf.WriteByte(byte(r))
+			} else if r <= 0xFF {
+				// Latin-1 range: Unicode code point == cp1252 byte value.
+				// Covers Swedish/Nordic: ö(F6) ä(E4) å(E5) Ö(D6) Ä(C4) Å(C5)
+				// and all other accented Latin characters in this range.
+				buf.WriteByte(byte(r))
+			}
+			// U+0100 and above: not representable in cp1252 — silently drop.
+		}
+	}
+	return buf.String()
 }
 
 // styledSpan is a run of text with optional inline formatting.

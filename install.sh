@@ -16,6 +16,42 @@ echo "Installing bot instance: $INSTANCE"
 echo "Building..."
 cd "$BOT_DIR/src" && go build -o "$BOT_DIR/bot" .
 
+# ── App bundle (icon + code signing) ───────────────────────────────────────────
+echo "Creating Artoo.app bundle..."
+BUNDLE="$BOT_DIR/Artoo.app"
+mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
+cp "$BOT_DIR/bot" "$BUNDLE/Contents/MacOS/bot"
+cp "$BOT_DIR/artoo.icns" "$BUNDLE/Contents/Resources/artoo.icns" 2>/dev/null || true
+
+cat > "$BUNDLE/Contents/Info.plist" << 'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>bot</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.bot.artoo</string>
+    <key>CFBundleName</key>
+    <string>Artoo</string>
+    <key>CFBundleIconFile</key>
+    <string>artoo</string>
+    <key>CFBundleVersion</key>
+    <string>1.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>LSUIElement</key>
+    <true/>
+</dict>
+</plist>
+PLIST
+
+# Sign with local identity if available
+if security find-identity -v -p codesigning 2>/dev/null | grep -q "Max Flach"; then
+    codesign --force --sign "Max Flach" --options runtime --timestamp=none "$BUNDLE" 2>/dev/null \
+        && echo "Bundle signed with local certificate"
+fi
+
 # ── Skills ─────────────────────────────────────────────────────────────────────
 SKILLS_DIR="$HOME/.config/bot/skills/dadjoke"
 if [ ! -d "$SKILLS_DIR" ]; then
@@ -174,7 +210,7 @@ if [ "$OS" = "Darwin" ]; then
     <string>$LABEL</string>
     <key>ProgramArguments</key>
     <array>
-        <string>$BOT_DIR/bot</string>
+        <string>$BOT_DIR/Artoo.app/Contents/MacOS/bot</string>
         <string>--instance</string>
         <string>$INSTANCE</string>
     </array>

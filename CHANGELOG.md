@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.19 — 2026-02-27
+
+### Added
+- **App bundle + icon** — bot is now packaged as `Artoo.app` with the Artoo PNG icon. Shows correctly in macOS Privacy & Security settings instead of a generic terminal icon.
+- **Local code signing** — `install.sh` signs the app bundle with a locally-trusted self-signed certificate (`Max Flach Local`), eliminating "unidentified developer" warnings in System Settings.
+
+### Fixed
+- **PDF Swedish characters** — `pdfText()` in `pdf.go` now does a full UTF-8 → Latin-1 conversion for all characters in U+0080–U+00FF (ö ä å Ö Ä Å and all other accented Latin chars). Previously only typographic chars (em dash, curly quotes) were converted, causing Swedish text to render as garbage (e.g. `ö` → `Ã¶`).
+
+### Internal
+- `install.sh` now builds the `Artoo.app` bundle, copies the icns icon, and signs the bundle as part of the install flow. LaunchAgent plist updated to run `Artoo.app/Contents/MacOS/bot` instead of the bare binary.
+- `artoo.icns` added to repo (generated from `artoo.png` at all standard icon sizes).
+- `CLAUDE.md` updated with PDF system documentation: encoding rules, auto-render trigger, template lookup, and "don't use external PDF tools" guidance.
+
 ## v0.18 — 2026-02-25
 
 ### Added

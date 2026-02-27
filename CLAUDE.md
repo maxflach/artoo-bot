@@ -88,7 +88,7 @@ The spec is served at `/openapi.yaml` and browsable via Swagger UI at `/docs`.
 
 **Cover page**: the first H1 in the markdown becomes the cover title. All subsequent content is rendered as the body starting on page 2.
 
-**Do not** introduce external PDF tools (pandoc, wkhtmltopdf, weasyprint) for report generation inside bot-managed workspaces — the bot handles it natively via `pdf.go`.
+**Always use the bot's PDF skill** — never use pandoc, wkhtmltopdf, weasyprint, or any external PDF tool inside bot-managed workspaces. The bot renders PDFs natively via `pdf.go`. To generate a PDF: write the content to a file named `report.md` in the working directory — the bot detects it automatically and renders + sends the styled PDF.
 
 ## Notes
 

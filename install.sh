@@ -193,6 +193,15 @@ if [ "$OS" = "Darwin" ]; then
     PLIST_DIR="$HOME/Library/LaunchAgents"
     PLIST="$PLIST_DIR/$LABEL.plist"
 
+    # Resolve the binary to run: prefer source-build bundle, fall back to get.sh bundle
+    if [ -x "$BOT_DIR/Artoo.app/Contents/MacOS/bot" ]; then
+        BOT_EXECUTABLE="$BOT_DIR/Artoo.app/Contents/MacOS/bot"
+    elif [ -x "$HOME/.local/share/artoo/Artoo.app/Contents/MacOS/artoo" ]; then
+        BOT_EXECUTABLE="$HOME/.local/share/artoo/Artoo.app/Contents/MacOS/artoo"
+    else
+        BOT_EXECUTABLE="$BOT_DIR/bot"
+    fi
+
     # Remove old system daemon if present (backwards compat)
     if sudo launchctl print system/com.bot.claude &>/dev/null 2>&1; then
         echo "Removing old system daemon..."
@@ -210,7 +219,7 @@ if [ "$OS" = "Darwin" ]; then
     <string>$LABEL</string>
     <key>ProgramArguments</key>
     <array>
-        <string>$BOT_DIR/Artoo.app/Contents/MacOS/bot</string>
+        <string>$BOT_EXECUTABLE</string>
         <string>--instance</string>
         <string>$INSTANCE</string>
     </array>

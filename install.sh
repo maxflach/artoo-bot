@@ -1,5 +1,5 @@
 #!/bin/bash
-# install.sh — install a bot instance as a background service
+# install.sh — download the latest artoo-bot release and install as a background service
 # Supports macOS (LaunchAgent) and Linux (systemd user service)
 #
 # Usage: bash install.sh [instance-name]
@@ -7,12 +7,11 @@
 set -e
 
 INSTANCE="${1:-default}"
-BOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 OS="$(uname -s)"
 ARCH="$(uname -m)"
 REPO="maxflach/artoo-bot"
 
-echo "Installing bot instance: $INSTANCE"
+echo "Installing Artoo bot instance: $INSTANCE"
 
 # ── Detect platform ────────────────────────────────────────────────────────────
 case "$OS" in
@@ -34,33 +33,39 @@ if [ -z "$LATEST" ]; then
   echo "Could not determine latest release. Check your internet connection."
   exit 1
 fi
-echo "Latest release: $LATEST"
+echo "Latest version: $LATEST"
 
 ASSET="artoo-${OS_SLUG}-${ARCH_SLUG}"
 DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${LATEST}/${ASSET}"
 ICNS_URL="https://github.com/${REPO}/releases/download/${LATEST}/artoo.icns"
 
+INSTALL_BASE="$HOME/.local/share/artoo"
+mkdir -p "$INSTALL_BASE"
+
 echo "Downloading $ASSET..."
-curl -fSL "$DOWNLOAD_URL" -o "$BOT_DIR/bot"
-chmod +x "$BOT_DIR/bot"
+curl -fSL "$DOWNLOAD_URL" -o "$INSTALL_BASE/artoo"
+chmod +x "$INSTALL_BASE/artoo"
 
-# Download icon (best-effort)
-curl -fsSL "$ICNS_URL" -o "$BOT_DIR/artoo.icns" 2>/dev/null || true
+# ── macOS: create Artoo.app bundle ─────────────────────────────────────────────
+if [ "$OS_SLUG" = "darwin" ]; then
+  BUNDLE="$INSTALL_BASE/Artoo.app"
+  mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
+  cp "$INSTALL_BASE/artoo" "$BUNDLE/Contents/MacOS/artoo"
 
-# ── App bundle (icon + code signing) ───────────────────────────────────────────
-echo "Creating Artoo.app bundle..."
-BUNDLE="$BOT_DIR/Artoo.app"
-mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
-cp "$BOT_DIR/bot" "$BUNDLE/Contents/MacOS/bot"
-cp "$BOT_DIR/artoo.icns" "$BUNDLE/Contents/Resources/artoo.icns" 2>/dev/null || true
+  # Download icon (best-effort)
+  ICNS_TMP="$(mktemp).icns"
+  if curl -fsSL "$ICNS_URL" -o "$ICNS_TMP" 2>/dev/null; then
+    cp "$ICNS_TMP" "$BUNDLE/Contents/Resources/artoo.icns"
+    rm -f "$ICNS_TMP"
+  fi
 
-cat > "$BUNDLE/Contents/Info.plist" << 'PLIST'
+  cat > "$BUNDLE/Contents/Info.plist" << PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>CFBundleExecutable</key>
-    <string>bot</string>
+    <string>artoo</string>
     <key>CFBundleIdentifier</key>
     <string>com.bot.artoo</string>
     <key>CFBundleName</key>
@@ -68,19 +73,25 @@ cat > "$BUNDLE/Contents/Info.plist" << 'PLIST'
     <key>CFBundleIconFile</key>
     <string>artoo</string>
     <key>CFBundleVersion</key>
-    <string>1.0</string>
+    <string>${LATEST}</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
+    <string>${LATEST}</string>
     <key>LSUIElement</key>
     <true/>
 </dict>
 </plist>
 PLIST
 
-# Sign with local identity if available
-if security find-identity -v -p codesigning 2>/dev/null | grep -q "Max Flach"; then
-    codesign --force --sign "Max Flach" --options runtime --timestamp=none "$BUNDLE" 2>/dev/null \
-        && echo "Bundle signed with local certificate"
+  # Sign with local identity if available
+  CERT_NAME="$(id -F 2>/dev/null || echo "$USER")"
+  if security find-identity -v -p codesigning 2>/dev/null | grep -qF "$CERT_NAME"; then
+    codesign --force --sign "$CERT_NAME" --options runtime --timestamp=none "$BUNDLE" 2>/dev/null \
+      && echo "Bundle signed by '$CERT_NAME'"
+  fi
+
+  BOT_EXECUTABLE="$BUNDLE/Contents/MacOS/artoo"
+else
+  BOT_EXECUTABLE="$INSTALL_BASE/artoo"
 fi
 
 # ── Skills ─────────────────────────────────────────────────────────────────────
@@ -218,20 +229,14 @@ TMPL
     echo "Report template installed: $TMPL_DIR/template.yaml"
 fi
 
+LOG_DIR="$HOME/.local/share/artoo/logs"
+mkdir -p "$LOG_DIR"
+
 # ── macOS ──────────────────────────────────────────────────────────────────────
 if [ "$OS" = "Darwin" ]; then
     LABEL="com.bot.claude.$INSTANCE"
     PLIST_DIR="$HOME/Library/LaunchAgents"
     PLIST="$PLIST_DIR/$LABEL.plist"
-
-    # Resolve the binary to run: prefer source-build bundle, fall back to get.sh bundle
-    if [ -x "$BOT_DIR/Artoo.app/Contents/MacOS/bot" ]; then
-        BOT_EXECUTABLE="$BOT_DIR/Artoo.app/Contents/MacOS/bot"
-    elif [ -x "$HOME/.local/share/artoo/Artoo.app/Contents/MacOS/artoo" ]; then
-        BOT_EXECUTABLE="$HOME/.local/share/artoo/Artoo.app/Contents/MacOS/artoo"
-    else
-        BOT_EXECUTABLE="$BOT_DIR/bot"
-    fi
 
     # Remove old system daemon if present (backwards compat)
     if sudo launchctl print system/com.bot.claude &>/dev/null 2>&1; then
@@ -255,7 +260,7 @@ if [ "$OS" = "Darwin" ]; then
         <string>$INSTANCE</string>
     </array>
     <key>WorkingDirectory</key>
-    <string>$BOT_DIR</string>
+    <string>$INSTALL_BASE</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>HOME</key>
@@ -268,9 +273,9 @@ if [ "$OS" = "Darwin" ]; then
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>$BOT_DIR/bot.$INSTANCE.log</string>
+    <string>$LOG_DIR/bot.$INSTANCE.log</string>
     <key>StandardErrorPath</key>
-    <string>$BOT_DIR/bot.$INSTANCE.err</string>
+    <string>$LOG_DIR/bot.$INSTANCE.err</string>
 </dict>
 </plist>
 EOF
@@ -279,9 +284,9 @@ EOF
     launchctl load -w "$PLIST"
 
     echo ""
-    echo "Bot '$INSTANCE' installed and running."
+    echo "Artoo '$INSTANCE' installed and running."
     echo "Config:  ~/.config/bot/$INSTANCE/config.yaml"
-    echo "Logs:    $BOT_DIR/bot.$INSTANCE.err"
+    echo "Logs:    $LOG_DIR/bot.$INSTANCE.err"
     echo ""
     echo "Useful commands:"
     echo "  launchctl unload $PLIST          # stop"
@@ -301,14 +306,14 @@ Description=Artoo Bot ($INSTANCE)
 After=network.target
 
 [Service]
-ExecStart=$BOT_DIR/bot --instance $INSTANCE
-WorkingDirectory=$BOT_DIR
+ExecStart=$BOT_EXECUTABLE --instance $INSTANCE
+WorkingDirectory=$INSTALL_BASE
 Restart=always
 RestartSec=5
 Environment=HOME=$HOME
 Environment=PATH=$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin
-StandardOutput=append:$BOT_DIR/bot.$INSTANCE.log
-StandardError=append:$BOT_DIR/bot.$INSTANCE.err
+StandardOutput=append:$LOG_DIR/bot.$INSTANCE.log
+StandardError=append:$LOG_DIR/bot.$INSTANCE.err
 
 [Install]
 WantedBy=default.target
@@ -318,9 +323,9 @@ EOF
     systemctl --user enable --now "$SERVICE"
 
     echo ""
-    echo "Bot '$INSTANCE' installed and running."
+    echo "Artoo '$INSTANCE' installed and running."
     echo "Config:  ~/.config/bot/$INSTANCE/config.yaml"
-    echo "Logs:    $BOT_DIR/bot.$INSTANCE.err"
+    echo "Logs:    $LOG_DIR/bot.$INSTANCE.err"
     echo ""
     echo "Useful commands:"
     echo "  systemctl --user stop $SERVICE      # stop"
@@ -330,6 +335,5 @@ EOF
 
 else
     echo "Unsupported OS: $OS"
-    echo "Please set up the service manually. Binary is at: $BOT_DIR/bot"
     exit 1
 fi

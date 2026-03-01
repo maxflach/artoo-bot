@@ -211,18 +211,20 @@ A summary is shown before anything is written. Config is saved to `~/.config/bot
 ### Install as a background service
 
 ```bash
-bash install.sh
+curl -fsSL https://raw.githubusercontent.com/maxflach/artoo-bot/main/install.sh | bash
 ```
 
-Detects your OS and installs the appropriate service:
+Downloads the latest release and registers it as a background service. No repo or Go toolchain required. Detects your OS and installs the appropriate service:
 
 - **macOS** — creates a LaunchAgent that starts on login and restarts on crash
 - **Linux** — creates a systemd user service with the same behaviour
 
+Binary and app bundle are installed to `~/.local/share/artoo/`. Logs go to `~/.local/share/artoo/logs/`.
+
 For named instances:
 
 ```bash
-bash install.sh workbot
+curl -fsSL https://raw.githubusercontent.com/maxflach/artoo-bot/main/install.sh | bash -s workbot
 ```
 
 ### Multiple instances
@@ -230,8 +232,8 @@ bash install.sh workbot
 You can run multiple isolated bots (different Telegram tokens, different personas) on the same machine:
 
 ```bash
-./bot --setup --instance workbot
-bash install.sh workbot
+artoo --setup --instance workbot
+curl -fsSL https://raw.githubusercontent.com/maxflach/artoo-bot/main/install.sh | bash -s workbot
 ```
 
 Each instance gets its own config (`~/.config/bot/workbot/`) and workspace (`~/bot-workspace/workbot/`).

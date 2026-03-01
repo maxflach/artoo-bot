@@ -87,8 +87,10 @@ Any CLI that accepts a prompt and returns text output can work — configure it 
 
 **WhatsApp** (optional):
 - Uses the [whatsmeow](https://github.com/tulir/whatsmeow) WhatsApp Web multi-device protocol (unofficial, no additional account required)
+- Add `whatsapp.allowed_numbers` (E.164 format) to your config, then restart the bot
 - On first start: a QR code is printed to the terminal — scan it with your phone via *Settings → Linked Devices → Link a Device*
 - Session is persisted to `~/.config/bot/<instance>/whatsapp.db`; subsequent restarts reconnect automatically without a new QR
+- **Adding to a running bot:** edit `~/.config/bot/<instance>/config.yaml`, add the `whatsapp:` block, then restart (`launchctl kickstart gui/$(id -u)/com.bot.claude.<instance>` on macOS, `systemctl --user restart artoo-bot-<instance>` on Linux). The QR code will appear in the log on first connect.
 - **Note:** uses an unofficial API that technically violates WhatsApp ToS. Low-traffic personal use is generally fine, but be aware of the risk
 
 **Web chat** (optional):

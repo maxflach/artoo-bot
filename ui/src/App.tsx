@@ -7,6 +7,7 @@ import Sidebar from './components/Sidebar'
 import ChatPane from './components/ChatPane'
 import ScheduleDialog from './components/ScheduleDialog'
 import FilesDialog from './components/FilesDialog'
+import WishlistDialog from './components/WishlistDialog'
 
 function Layout() {
   const { project: rawProject } = useParams<{ project: string }>()
@@ -22,6 +23,7 @@ function Layout() {
       <ChatPane />
       <ScheduleDialog />
       <FilesDialog />
+      <WishlistDialog />
     </div>
   )
 }

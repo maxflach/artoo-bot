@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.20 — 2026-03-01
+
+### Added
+- **WhatsApp transport** — bot now supports WhatsApp via the `whatsmeow` library. Configure `whatsapp.allowed_numbers` (E.164 format) and optional `whatsapp.admin_number` in `config.yaml`. On first run the bot prints a QR code in the terminal (and forwards a notice to the Telegram admin) to link a WhatsApp Web session. Session is persisted to `whatsapp.db` so subsequent starts reconnect automatically.
+- **Wishlist API** — `GET /chat/wishes` and `POST /chat/wishes` endpoints added to the webchat server; individual wishes deletable via `DELETE /chat/wishes/{id}`. New `WishlistDialog` UI component in the webchat frontend.
+- **Shared workspace by numeric owner ID** — project-switch callbacks now embed the numeric owner ID (`@id:NNNN/project`) instead of relying on username lookup, making cross-user workspace switching reliable even when usernames are not set.
+
 ## v0.19 — 2026-02-27
 
 ### Added

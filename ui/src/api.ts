@@ -150,3 +150,44 @@ export async function downloadFile(key: string, id: number, filename: string): P
   document.body.removeChild(a)
   URL.revokeObjectURL(url)
 }
+
+// --- Wishes ---
+
+export interface Wish {
+  id: number
+  message: string
+  done: boolean
+  created_at: string
+}
+
+export async function fetchWishes(key: string): Promise<Wish[]> {
+  const r = await fetch('/chat/wishes', { headers: { Authorization: `Bearer ${key}` } })
+  if (!r.ok) throw new Error(`${r.status}`)
+  const data = await r.json()
+  return data.wishes ?? []
+}
+
+export async function addWish(key: string, message: string): Promise<void> {
+  const r = await fetch('/chat/wishes', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message }),
+  })
+  if (!r.ok) throw new Error(`${r.status}`)
+}
+
+export async function markWishDone(key: string, id: number): Promise<void> {
+  const r = await fetch(`/chat/wishes/${id}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${key}` },
+  })
+  if (!r.ok) throw new Error(`${r.status}`)
+}
+
+export async function deleteWish(key: string, id: number): Promise<void> {
+  const r = await fetch(`/chat/wishes/${id}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${key}` },
+  })
+  if (!r.ok) throw new Error(`${r.status}`)
+}

@@ -836,6 +836,11 @@ func (m *MemoryStore) markWishDone(id int64) error {
 	return err
 }
 
+func (m *MemoryStore) deleteWish(id int64) error {
+	_, err := m.db.Exec("DELETE FROM wishes WHERE id = ?", id)
+	return err
+}
+
 // --- Workspace shares ---
 
 // WorkspaceShare represents a shared workspace between users.

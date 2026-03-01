@@ -80,6 +80,8 @@ func (wc *WebChatTransport) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/chat/schedules/", wc.bot.requireAPIKey(wc.handleScheduleByID))
 	mux.HandleFunc("/chat/files", wc.bot.requireAPIKey(wc.handleFiles))
 	mux.HandleFunc("/chat/files/", wc.bot.requireAPIKey(wc.handleFileByID))
+	mux.HandleFunc("/chat/wishes", wc.bot.requireAPIKey(wc.handleWishes))
+	mux.HandleFunc("/chat/wishes/", wc.bot.requireAPIKey(wc.handleWishByID))
 }
 
 func (wc *WebChatTransport) handleAvatar(w http.ResponseWriter, r *http.Request) {
@@ -730,5 +732,80 @@ func (wc *WebChatTransport) handleFileByID(w http.ResponseWriter, r *http.Reques
 		default:
 			apiError(w, http.StatusMethodNotAllowed, "GET or DELETE only")
 		}
+	}
+}
+
+// handleWishes handles GET /chat/wishes and POST /chat/wishes.
+func (wc *WebChatTransport) handleWishes(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		wishes, err := wc.bot.mem.listWishes()
+		if err != nil {
+			apiError(w, http.StatusInternalServerError, "failed to list wishes")
+			return
+		}
+		type wishEntry struct {
+			ID        int64  `json:"id"`
+			Message   string `json:"message"`
+			Done      bool   `json:"done"`
+			CreatedAt string `json:"created_at"`
+		}
+		entries := make([]wishEntry, 0, len(wishes))
+		for _, w := range wishes {
+			entries = append(entries, wishEntry{
+				ID:        w.ID,
+				Message:   w.Message,
+				Done:      w.Done,
+				CreatedAt: w.CreatedAt.Format("2006-01-02T15:04:05Z"),
+			})
+		}
+		apiJSON(w, http.StatusOK, map[string]any{"wishes": entries})
+
+	case http.MethodPost:
+		body, err := io.ReadAll(io.LimitReader(r.Body, 4096))
+		if err != nil || len(body) == 0 {
+			apiError(w, http.StatusBadRequest, "empty body")
+			return
+		}
+		var req struct {
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil || strings.TrimSpace(req.Message) == "" {
+			apiError(w, http.StatusBadRequest, "message required")
+			return
+		}
+		if err := wc.bot.mem.addWish(wc.adminUserID(), "", strings.TrimSpace(req.Message)); err != nil {
+			apiError(w, http.StatusInternalServerError, "failed to add wish")
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+
+	default:
+		apiError(w, http.StatusMethodNotAllowed, "GET or POST only")
+	}
+}
+
+// handleWishByID handles PATCH /chat/wishes/{id} (mark done) and DELETE /chat/wishes/{id}.
+func (wc *WebChatTransport) handleWishByID(w http.ResponseWriter, r *http.Request) {
+	var id int64
+	if _, err := fmt.Sscanf(strings.TrimPrefix(r.URL.Path, "/chat/wishes/"), "%d", &id); err != nil || id == 0 {
+		apiError(w, http.StatusBadRequest, "invalid wish id")
+		return
+	}
+	switch r.Method {
+	case http.MethodPatch:
+		if err := wc.bot.mem.markWishDone(id); err != nil {
+			apiError(w, http.StatusInternalServerError, "update failed")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	case http.MethodDelete:
+		if err := wc.bot.mem.deleteWish(id); err != nil {
+			apiError(w, http.StatusInternalServerError, "delete failed")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		apiError(w, http.StatusMethodNotAllowed, "PATCH or DELETE only")
 	}
 }

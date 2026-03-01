@@ -1,7 +1,7 @@
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { apiKeyAtom, filesDialogOpenAtom, projectsAtom, scheduleDialogOpenAtom, themeAtom } from '../atoms'
+import { apiKeyAtom, filesDialogOpenAtom, projectsAtom, scheduleDialogOpenAtom, themeAtom, wishlistDialogOpenAtom } from '../atoms'
 import { fetchProjects, switchProject, type Project } from '../api'
 
 function typeIcon(type: string) {
@@ -17,6 +17,7 @@ export default function Sidebar() {
   const setScheduleDialogOpen = useSetAtom(scheduleDialogOpenAtom)
   const setFilesDialogOpen = useSetAtom(filesDialogOpenAtom)
   const [theme, setTheme] = useAtom(themeAtom)
+  const setWishlistDialogOpen = useSetAtom(wishlistDialogOpenAtom)
   const navigate = useNavigate()
   const { project: rawProject } = useParams<{ project: string }>()
   const currentProject = decodeURIComponent(rawProject ?? 'global')
@@ -143,6 +144,13 @@ export default function Sidebar() {
         >
           <span className="text-base">⏰</span>
           <span>Schedules</span>
+        </button>
+        <button
+          onClick={() => setWishlistDialogOpen(true)}
+          className="w-full text-sm text-gray-500 dark:text-zinc-500 hover:text-gray-800 dark:hover:text-zinc-200 hover:bg-gray-100 dark:hover:bg-white/5 transition-all py-1.5 px-3 rounded-lg flex items-center gap-2.5"
+        >
+          <span className="text-base">✨</span>
+          <span>Wishlist</span>
         </button>
         <div className="my-1 border-t border-gray-200 dark:border-white/5" />
         <button

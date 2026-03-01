@@ -9,12 +9,43 @@ set -e
 INSTANCE="${1:-default}"
 BOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 OS="$(uname -s)"
+ARCH="$(uname -m)"
+REPO="maxflach/artoo-bot"
 
 echo "Installing bot instance: $INSTANCE"
 
-# ── Build ──────────────────────────────────────────────────────────────────────
-echo "Building..."
-cd "$BOT_DIR/src" && go build -o "$BOT_DIR/bot" .
+# ── Detect platform ────────────────────────────────────────────────────────────
+case "$OS" in
+  Darwin) OS_SLUG="darwin" ;;
+  Linux)  OS_SLUG="linux"  ;;
+  *) echo "Unsupported OS: $OS"; exit 1 ;;
+esac
+case "$ARCH" in
+  x86_64)          ARCH_SLUG="amd64" ;;
+  arm64 | aarch64) ARCH_SLUG="arm64" ;;
+  *) echo "Unsupported architecture: $ARCH"; exit 1 ;;
+esac
+
+# ── Download latest release ────────────────────────────────────────────────────
+echo "Fetching latest release..."
+LATEST=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+  | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\(.*\)".*/\1/')
+if [ -z "$LATEST" ]; then
+  echo "Could not determine latest release. Check your internet connection."
+  exit 1
+fi
+echo "Latest release: $LATEST"
+
+ASSET="artoo-${OS_SLUG}-${ARCH_SLUG}"
+DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${LATEST}/${ASSET}"
+ICNS_URL="https://github.com/${REPO}/releases/download/${LATEST}/artoo.icns"
+
+echo "Downloading $ASSET..."
+curl -fSL "$DOWNLOAD_URL" -o "$BOT_DIR/bot"
+chmod +x "$BOT_DIR/bot"
+
+# Download icon (best-effort)
+curl -fsSL "$ICNS_URL" -o "$BOT_DIR/artoo.icns" 2>/dev/null || true
 
 # ── App bundle (icon + code signing) ───────────────────────────────────────────
 echo "Creating Artoo.app bundle..."

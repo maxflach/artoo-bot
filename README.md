@@ -1,6 +1,6 @@
 # Artoo Bot
 
-A personal bot that gives you remote access to an agentic CLI running on your own machine. Send a message, get things done — research, file work, scheduled tasks, and more. Supports Telegram, Discord, and a browser-based web chat UI.
+A personal bot that gives you remote access to an agentic CLI running on your own machine. Send a message, get things done — research, file work, scheduled tasks, and more. Supports Telegram, Discord, WhatsApp, and a browser-based web chat UI.
 
 ---
 
@@ -84,6 +84,12 @@ Any CLI that accepts a prompt and returns text output can work — configure it 
 2. Enable *Message Content Intent* under Bot → Privileged Gateway Intents
 3. Copy the bot token; invite the bot to your server with `bot` scope and `Send Messages` permission
 4. Add `discord.token` and your Discord user ID (snowflake) to config
+
+**WhatsApp** (optional):
+- Uses the [whatsmeow](https://github.com/tulir/whatsmeow) WhatsApp Web multi-device protocol (unofficial, no additional account required)
+- On first start: a QR code is printed to the terminal — scan it with your phone via *Settings → Linked Devices → Link a Device*
+- Session is persisted to `~/.config/bot/<instance>/whatsapp.db`; subsequent restarts reconnect automatically without a new QR
+- **Note:** uses an unofficial API that technically violates WhatsApp ToS. Low-traffic personal use is generally fine, but be aware of the risk
 
 **Web chat** (optional):
 - Set `webchat.enabled: true` in config and make sure `api.port` is non-zero
@@ -524,6 +530,13 @@ telegram:
 #     - 987654321098765432   # Discord user snowflake IDs
 #   admin_user_id: 987654321098765432
 
+# Optional: WhatsApp transport (unofficial WhatsApp Web protocol)
+# Scan the QR code printed on first start from WhatsApp → Linked Devices.
+# whatsapp:
+#   allowed_numbers:
+#     - "+15551234567"   # E.164 format
+#   admin_number: "+15551234567"
+
 # Optional: browser-based web chat (requires api.port to be set)
 # webchat:
 #   enabled: true
@@ -710,9 +723,10 @@ Each skill becomes a tool with the skill's name and description. Claude can call
 ## Architecture
 
 ```
-Telegram ─┐
-Discord  ─┤─→ Bot (Go) ←── HTTP API  (Bearer token auth)
-Web chat ─┘        │           ├── /chat/           (React SPA — embedded dist)
+Telegram  ─┐
+Discord   ─┤
+WhatsApp  ─┤─→ Bot (Go) ←── HTTP API  (Bearer token auth)
+Web chat  ─┘        │           ├── /chat/           (React SPA — embedded dist)
                    │           ├── /chat/sse         (SSE stream, auth via ?key=)
                    │           ├── /chat/message     (send message)
                    │           ├── /chat/projects    (project list)
@@ -755,7 +769,7 @@ Set `repl: false` (default) to use the original fire-and-wait mode where each me
 - [x] Image generation — `/imagine` skill via Gemini Imagen
 - [x] Gmail skill — inbox overview, search, read, archive, bulk-archive
 - [x] Google Calendar skill — day/week view, event search, event creation
-- [x] Multi-transport — Telegram, Discord, web chat (React UI with sidebar, project switching, persistent history)
+- [x] Multi-transport — Telegram, Discord, WhatsApp, web chat (React UI with sidebar, project switching, persistent history)
 - [x] Docker support — `Dockerfile` + `docker-compose.yml` with Claude Code, pdf tools, and python pre-installed
 - [x] Allowed external paths — admin-provisioned access to directories outside the user sandbox
 - [x] Session-resume mode — native multi-turn context via Claude Code's `--session-id` / `--resume`

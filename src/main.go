@@ -233,6 +233,11 @@ func newBot(cfg *Config) (*Bot, error) {
 	for _, id := range cfg.Discord.AllowedUserIDs {
 		allowed[id] = true
 	}
+	for _, num := range cfg.WhatsApp.AllowedNumbers {
+		if id, err := parsePhoneNumber(num); err == nil {
+			allowed[id] = true
+		}
+	}
 
 	mem, err := newMemoryStore()
 	if err != nil {
@@ -240,9 +245,14 @@ func newBot(cfg *Config) (*Bot, error) {
 	}
 
 	// Collect all allowed user IDs: config + DB-approved users
-	allUserIDs := make([]int64, 0, len(cfg.Telegram.AllowedUserIDs)+len(cfg.Discord.AllowedUserIDs))
+	allUserIDs := make([]int64, 0, len(cfg.Telegram.AllowedUserIDs)+len(cfg.Discord.AllowedUserIDs)+len(cfg.WhatsApp.AllowedNumbers))
 	allUserIDs = append(allUserIDs, cfg.Telegram.AllowedUserIDs...)
 	allUserIDs = append(allUserIDs, cfg.Discord.AllowedUserIDs...)
+	for _, num := range cfg.WhatsApp.AllowedNumbers {
+		if id, err := parsePhoneNumber(num); err == nil {
+			allUserIDs = append(allUserIDs, id)
+		}
+	}
 	for _, u := range mem.listApprovedUsers() {
 		allUserIDs = append(allUserIDs, u.UserID)
 	}
@@ -298,6 +308,13 @@ func newBot(cfg *Config) (*Bot, error) {
 	if cfg.WebChat.Enabled {
 		b.transports["wc"] = newWebChatTransport(b)
 	}
+	if len(cfg.WhatsApp.AllowedNumbers) > 0 {
+		wa, err := newWhatsAppTransport(b)
+		if err != nil {
+			return nil, fmt.Errorf("whatsapp: %w", err)
+		}
+		b.transports["wa"] = wa
+	}
 
 	if len(b.transports) == 0 {
 		return nil, fmt.Errorf("no transports configured (set telegram.token, discord.token, or webchat.enabled)")
@@ -352,6 +369,11 @@ func (b *Bot) isAdmin(userID int64) bool {
 	}
 	if b.cfg.Discord.AdminUserID != 0 && userID == b.cfg.Discord.AdminUserID {
 		return true
+	}
+	if b.cfg.WhatsApp.AdminNumber != "" {
+		if id, err := parsePhoneNumber(b.cfg.WhatsApp.AdminNumber); err == nil && userID == id {
+			return true
+		}
 	}
 	return false
 }
@@ -732,13 +754,19 @@ func (b *Bot) handleProjectList(chatID string, sess *Session) {
 	for _, s := range b.mem.listSharedWithMe(sess.userID) {
 		ownerBaseDir := userWorkingDir(b.cfg.Backend.WorkingDir, s.OwnerID)
 		wsDir := projectDir(ownerBaseDir, s.Workspace)
-		switchKey := fmt.Sprintf("@%s/%s", s.OwnerName, s.Workspace)
+		displayName := s.OwnerName
+		if displayName == "" {
+			displayName = fmt.Sprintf("%d", s.OwnerID)
+		}
+		switchKey := fmt.Sprintf("@%s/%s", displayName, s.Workspace)
 		accessLabel := s.Access
 		if s.Access == "write" {
 			accessLabel = "read & write"
 		}
-		title := fmt.Sprintf("@%s/%s (%s)", s.OwnerName, s.Workspace, accessLabel)
-		projects = append(projects, proj{switchKey, title, wsDir, "projswitch:" + switchKey})
+		title := fmt.Sprintf("@%s/%s (%s)", displayName, s.Workspace, accessLabel)
+		// Use owner ID in callback to avoid relying on username lookup
+		callbackKey := fmt.Sprintf("@id:%d/%s", s.OwnerID, s.Workspace)
+		projects = append(projects, proj{switchKey, title, wsDir, "projswitch:" + callbackKey})
 	}
 
 	isActive := func(p proj) bool {
@@ -865,7 +893,8 @@ func (b *Bot) handleWorkspace(chatID string, sess *Session, args string) {
 	}
 }
 
-// handleSharedWorkspace switches to a project owned by another user (format: @owner/project).
+// handleSharedWorkspace switches to a project owned by another user.
+// Accepts "@owner/project" (username) or "@id:NNNN/project" (numeric owner ID).
 func (b *Bot) handleSharedWorkspace(chatID string, sess *Session, name string) {
 	atPart := strings.TrimPrefix(name, "@")
 	slashIdx := strings.Index(atPart, "/")
@@ -873,10 +902,19 @@ func (b *Bot) handleSharedWorkspace(chatID string, sess *Session, name string) {
 		b.reply(chatID, "Invalid shared project format. Use @owner/project.")
 		return
 	}
-	ownerUsername := atPart[:slashIdx]
+	ownerPart := atPart[:slashIdx]
 	projectName := atPart[slashIdx+1:]
 
-	ownerID := b.mem.userIDForUsername(ownerUsername)
+	var ownerID int64
+	var ownerUsername string
+	if strings.HasPrefix(ownerPart, "id:") {
+		// Numeric ID from button callback — reliable, no username lookup needed.
+		fmt.Sscanf(strings.TrimPrefix(ownerPart, "id:"), "%d", &ownerID)
+		ownerUsername = ownerPart // display fallback
+	} else {
+		ownerUsername = ownerPart
+		ownerID = b.mem.userIDForUsername(ownerUsername)
+	}
 	if ownerID == 0 {
 		b.reply(chatID, fmt.Sprintf("User @%s not found.", ownerUsername))
 		return

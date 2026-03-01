@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -26,6 +27,10 @@ type Config struct {
 		AllowedUserIDs []int64 `yaml:"allowed_user_ids"` // Discord user IDs (snowflakes as int64)
 		AdminUserID    int64   `yaml:"admin_user_id"`
 	} `yaml:"discord"`
+	WhatsApp struct {
+		AllowedNumbers []string `yaml:"allowed_numbers"` // E.164 format: "+15551234567"
+		AdminNumber    string   `yaml:"admin_number"`
+	} `yaml:"whatsapp"`
 	WebChat struct {
 		Enabled bool `yaml:"enabled"` // serve /chat and /chat/sse endpoints
 	} `yaml:"webchat"`
@@ -320,4 +325,12 @@ api:
 	fmt.Printf("  %s✓ Workspace%s   → %s\n", green, reset, ws)
 	fmt.Printf("\n  %sInstall as background service:%s\n", dim, reset)
 	fmt.Printf("  bash install.sh %s\n\n", instance)
+}
+
+// parsePhoneNumber strips E.164 formatting (+, spaces, dashes) and parses as int64.
+func parsePhoneNumber(s string) (int64, error) {
+	s = strings.TrimPrefix(s, "+")
+	s = strings.ReplaceAll(s, " ", "")
+	s = strings.ReplaceAll(s, "-", "")
+	return strconv.ParseInt(s, 10, 64)
 }

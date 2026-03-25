@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.21 — 2026-03-25
+
+### Added
+- **Native email support** — send emails via SMTP (Gmail app passwords + generic SMTP). New `/email` commands: `/email setup`, `/email test`, `/email send <to> | <subject> | <body>`, `/email report [to]`. Credentials stored via the existing `/secret` system with skill name `email`.
+- **Email templates** — YAML-based email templates (`email-template.yaml`) with 3-tier resolution (project → user → global → default), following the same pattern as PDF report templates. Controls from name, subject prefix, signature, and HTML styling.
+- **Auto-email reports** — when `email.auto_send_reports: true` is set in config, PDF reports generated from `report.md` are automatically emailed to the configured `default_recipient` in addition to being sent via Telegram.
+- **Schedule IDs in `/schedules`** — each schedule now shows its ID (e.g. `#5`) in the listing, making it easy to use `/unschedule <id>`.
+
+### Fixed
+- **Stale cron job execution** — when a CLI agent deleted a schedule from the database (via SQL), the in-memory cron scheduler still had the job registered and would fire it. `runScheduledTask` now verifies the schedule still exists in the DB before executing, and triggers a reload if it's been deleted.
+- **`/style` crash on missing README** — using `/style` on a project with no `README.md` previously showed a raw error. Now creates a minimal README with the agent style section.
+
+### Internal
+- **main.go split** — `main.go` (2,568 lines) split into 5 focused files while staying in `package main`: `project.go` (workspace/project management), `schedule.go` (scheduling), `claude.go` (CLI invocation and system prompt), `helpers.go` (utilities, skills, secrets), and a slimmed `main.go` (558 lines) with core types and command routing.
+- `config.go` gains an `Email` struct with provider, SMTP settings, default recipient, and auto-send toggle.
+- `memory.go` gains `scheduleExists()` for the cron guard.
+- `install.sh` updated to download latest GitHub release directly — fully standalone, no repo clone required.
+
 ## v0.20 — 2026-03-01
 
 ### Added

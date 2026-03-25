@@ -279,6 +279,11 @@ Send any plain text message — it goes straight to your configured agentic CLI,
 | `/secret del <name>` | Delete a secret from the current project |
 | `/secret del --global <name>` | Delete from your global scope |
 | `/secret del --system <name>` | Delete a system secret _(admin only)_ |
+| `/email` | Show email configuration status |
+| `/email setup` | Step-by-step email setup instructions |
+| `/email test [to]` | Send a test email to verify configuration |
+| `/email send <to> \| <subject> \| <body>` | Send an email |
+| `/email report [to]` | Email the current project's report as PDF |
 | `/new` | Fresh start — clear history and reset to global |
 | `/clear` | Clear conversation history only |
 | `/help` | Show all commands |
@@ -508,6 +513,44 @@ The `imagine` skill is installed automatically by `install.sh`. It calls the Gem
 
 See [SKILLS.md](SKILLS.md) for all bundled skills and their setup instructions.
 
+### Email
+
+The bot can send emails via SMTP — useful for emailing PDF reports, sharing results with people who aren't on Telegram, or automating email notifications from scheduled tasks.
+
+**Setup:**
+
+1. Add the email block to `config.yaml`:
+
+```yaml
+email:
+  provider: gmail            # or "smtp" for generic SMTP
+  default_recipient: you@example.com
+  auto_send_reports: false   # auto-email PDFs when report.md is generated
+  # smtp:                    # only needed for non-Gmail
+  #   host: mail.example.com
+  #   port: 587
+  #   tls: starttls          # or "tls" for port 465
+```
+
+2. Store SMTP credentials:
+
+```
+/secret set --global SMTP_USERNAME your@gmail.com --skill email
+/secret set --global SMTP_PASSWORD <app-password> --skill email
+```
+
+For Gmail, generate an App Password at *Google Account → Security → 2-Step Verification → App Passwords*.
+
+3. Test it:
+
+```
+/email test you@example.com
+```
+
+**Email templates** follow the same 3-tier resolution as PDF templates: `<project>/email-template.yaml` → `<user>/email-template.yaml` → `~/.config/bot/email-template/email-template.yaml` → built-in default. Templates control the from name, subject prefix, signature, and HTML styling.
+
+**Auto-email reports:** when `auto_send_reports: true` is set, every PDF generated from `report.md` is also emailed to the `default_recipient` — both from user messages, scheduled tasks, and skills.
+
 ---
 
 ### User approval
@@ -565,6 +608,16 @@ memory:
 
 api:
   port: 8088  # set to 0 to disable; required for web chat
+
+# Optional: email sending via SMTP
+# email:
+#   provider: gmail          # or "smtp"
+#   default_recipient: you@example.com
+#   auto_send_reports: false
+#   smtp:                    # only for non-Gmail
+#     host: mail.example.com
+#     port: 587
+#     tls: starttls
 
 # Optional: grant users access to directories outside their sandbox
 # allowed_paths:

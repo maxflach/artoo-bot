@@ -52,6 +52,16 @@ type Config struct {
 	API struct {
 		Port int `yaml:"port"` // 0 = disabled
 	} `yaml:"api"`
+	Email struct {
+		Provider         string `yaml:"provider"`          // "gmail", "smtp", or "" (disabled)
+		SMTP             struct {
+			Host string `yaml:"host"`
+			Port int    `yaml:"port"`
+			TLS  string `yaml:"tls"` // "starttls" or "tls"
+		} `yaml:"smtp"`
+		DefaultRecipient string `yaml:"default_recipient"` // default "to" address
+		AutoSendReports  bool   `yaml:"auto_send_reports"` // auto-email PDF reports
+	} `yaml:"email"`
 	AllowedPaths map[string][]AllowedPath `yaml:"allowed_paths"`
 }
 

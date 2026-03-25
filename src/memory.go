@@ -459,6 +459,12 @@ func (m *MemoryStore) listSchedulesForUser(userID int64) ([]Schedule, error) {
 	return scanSchedules(rows)
 }
 
+func (m *MemoryStore) scheduleExists(id int64) bool {
+	var count int
+	err := m.db.QueryRow("SELECT COUNT(*) FROM schedules WHERE id = ? AND enabled = 1", id).Scan(&count)
+	return err == nil && count > 0
+}
+
 func (m *MemoryStore) deleteSchedule(userID, id int64) error {
 	_, err := m.db.Exec("DELETE FROM schedules WHERE id = ? AND user_id = ?", id, userID)
 	return err

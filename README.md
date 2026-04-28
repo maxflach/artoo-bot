@@ -246,6 +246,8 @@ Each instance gets its own config (`~/.config/bot/workbot/`) and workspace (`~/b
 
 Send any plain text message — it goes straight to your configured agentic CLI, running on your machine in the current project's directory.
 
+You can also drop files into the chat. PDFs and other documents are extracted, photos land in the working directory as `photo_<unix>.jpg` (Claude Code reads images natively), voice notes as `voice_<unix>.ogg`, and audio files keep their original filename. Anything you upload shows up in `/files` and is announced to the agent as a "Recent Uploads" section in the system prompt, so the next message can refer to it.
+
 ### Commands
 
 | Command | Description |
@@ -284,8 +286,7 @@ Send any plain text message — it goes straight to your configured agentic CLI,
 | `/email test [to]` | Send a test email to verify configuration |
 | `/email send <to> \| <subject> \| <body>` | Send an email |
 | `/email report [to]` | Email the current project's report as PDF |
-| `/new` | Fresh start — clear history and reset to global |
-| `/clear` | Clear conversation history only |
+| `/new` (alias `/clear`) | Fresh start — clear history and reset to global |
 | `/help` | Show all commands |
 | `/wish <message>` | Submit a feature request |
 | `/wishes` | List all wishes with inline "Mark done" buttons _(admin only)_ |
@@ -831,8 +832,7 @@ Set `repl: false` (default) to use the original fire-and-wait mode where each me
 - [x] Allowed external paths — admin-provisioned access to directories outside the user sandbox
 - [x] Session-resume mode — native multi-turn context via Claude Code's `--session-id` / `--resume`
 - [x] Project sharing — share projects with other approved users with read or read & write access
-- [ ] Voice message support
-- [ ] Multi-modal file handling (images, audio)
+- [x] Multi-modal uploads — photos, voice notes, and audio files saved to the project workspace and surfaced in the system prompt
 
 ---
 

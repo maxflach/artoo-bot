@@ -12,6 +12,27 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
+// botMenuCommands is the static list of commands published to Telegram's slash-popup
+// via SetMyCommands at bot startup. Dynamic skills are intentionally excluded — they
+// can change at runtime and would require re-registering on every reload.
+var botMenuCommands = []tgbotapi.BotCommand{
+	{Command: "new", Description: "fresh start (clear history + reset to global)"},
+	{Command: "clear", Description: "fresh start (alias of /new)"},
+	{Command: "help", Description: "show command reference"},
+	{Command: "project", Description: "list/switch projects"},
+	{Command: "memory", Description: "show memories for current project"},
+	{Command: "remember", Description: "save a fact to memory"},
+	{Command: "files", Description: "show recent files"},
+	{Command: "model", Description: "show or switch model"},
+	{Command: "at", Description: "one-off reminder"},
+	{Command: "schedule", Description: "recurring scheduled task"},
+	{Command: "schedules", Description: "list scheduled tasks"},
+	{Command: "report", Description: "render report.md as PDF"},
+	{Command: "email", Description: "email commands"},
+	{Command: "skills", Description: "list custom commands"},
+	{Command: "wish", Description: "submit a feature request"},
+}
+
 // TelegramTransport implements Transport using the Telegram Bot API.
 type TelegramTransport struct {
 	bot *Bot
@@ -171,6 +192,11 @@ func tgChatID(id int64) string {
 // Start begins polling for Telegram updates. Blocks until the update channel closes.
 func (t *TelegramTransport) Start(handler func(IncomingMessage)) error {
 	log.Printf("%s online (@%s) via Telegram", t.bot.cfg.Persona.Name, t.api.Self.UserName)
+
+	if _, err := t.api.Request(tgbotapi.NewSetMyCommands(botMenuCommands...)); err != nil {
+		log.Printf("warning: failed to register Telegram command menu: %v", err)
+	}
+
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
 	updates := t.api.GetUpdatesChan(u)
@@ -206,6 +232,18 @@ func (t *TelegramTransport) handleTelegramMessage(msg *tgbotapi.Message, handler
 	// Handle file/document uploads
 	if msg.Document != nil {
 		go t.handleFileUpload(chatID, sess, msg.Document)
+		return
+	}
+	if len(msg.Photo) > 0 {
+		go t.handlePhotoUpload(chatID, sess, msg.Photo[len(msg.Photo)-1])
+		return
+	}
+	if msg.Voice != nil {
+		go t.handleVoiceUpload(chatID, sess, msg.Voice)
+		return
+	}
+	if msg.Audio != nil {
+		go t.handleAudioUpload(chatID, sess, msg.Audio)
 		return
 	}
 
@@ -649,6 +687,81 @@ Create a well-structured markdown file called "%s":
 	}
 
 	b.reply(chatID, fmt.Sprintf("*%s* extracted to `%s` ✓", doc.FileName, mdName))
+}
+
+// downloadTelegramFile resolves a Telegram FileID to a download URL and saves it
+// to destPath. Returns the bytes-written count from downloadURL.
+func (t *TelegramTransport) downloadTelegramFile(fileID, destPath string) (int64, error) {
+	file, err := t.api.GetFile(tgbotapi.FileConfig{FileID: fileID})
+	if err != nil {
+		return 0, fmt.Errorf("get file: %w", err)
+	}
+	url := file.Link(t.bot.cfg.Telegram.Token)
+	return downloadURL(url, destPath)
+}
+
+// handlePhotoUpload saves a Telegram photo (largest size) to the workspace.
+// Claude Code can read images natively via its Read tool, so no extraction step.
+func (t *TelegramTransport) handlePhotoUpload(chatID string, sess *Session, photo tgbotapi.PhotoSize) {
+	b := t.bot
+	sess.mu.Lock()
+	wd := sess.workingDir
+	ws := sess.workspace
+	sess.mu.Unlock()
+
+	name := fmt.Sprintf("photo_%d.jpg", time.Now().Unix())
+	destPath := filepath.Join(wd, name)
+	if _, err := t.downloadTelegramFile(photo.FileID, destPath); err != nil {
+		b.reply(chatID, fmt.Sprintf("Failed to save photo: %v", err))
+		return
+	}
+	b.mem.recordFile(sess.userID, ws, name, destPath, int64(photo.FileSize))
+	b.reply(chatID, fmt.Sprintf("Photo saved as `%s` ✓", name))
+}
+
+// handleVoiceUpload saves a Telegram voice note (.ogg) to the workspace.
+func (t *TelegramTransport) handleVoiceUpload(chatID string, sess *Session, voice *tgbotapi.Voice) {
+	b := t.bot
+	sess.mu.Lock()
+	wd := sess.workingDir
+	ws := sess.workspace
+	sess.mu.Unlock()
+
+	name := fmt.Sprintf("voice_%d.ogg", time.Now().Unix())
+	destPath := filepath.Join(wd, name)
+	if _, err := t.downloadTelegramFile(voice.FileID, destPath); err != nil {
+		b.reply(chatID, fmt.Sprintf("Failed to save voice note: %v", err))
+		return
+	}
+	b.mem.recordFile(sess.userID, ws, name, destPath, int64(voice.FileSize))
+	b.reply(chatID, fmt.Sprintf("Voice note saved as `%s` ✓ (%ds)", name, voice.Duration))
+}
+
+// handleAudioUpload saves a Telegram audio file to the workspace.
+func (t *TelegramTransport) handleAudioUpload(chatID string, sess *Session, audio *tgbotapi.Audio) {
+	b := t.bot
+	sess.mu.Lock()
+	wd := sess.workingDir
+	ws := sess.workspace
+	sess.mu.Unlock()
+
+	name := audio.FileName
+	if name == "" {
+		ext := ".mp3"
+		if audio.MimeType == "audio/ogg" {
+			ext = ".ogg"
+		} else if audio.MimeType == "audio/x-wav" || audio.MimeType == "audio/wav" {
+			ext = ".wav"
+		}
+		name = fmt.Sprintf("audio_%d%s", time.Now().Unix(), ext)
+	}
+	destPath := filepath.Join(wd, name)
+	if _, err := t.downloadTelegramFile(audio.FileID, destPath); err != nil {
+		b.reply(chatID, fmt.Sprintf("Failed to save audio: %v", err))
+		return
+	}
+	b.mem.recordFile(sess.userID, ws, name, destPath, int64(audio.FileSize))
+	b.reply(chatID, fmt.Sprintf("Audio saved as `%s` ✓", name))
 }
 
 // handleProjShareCallback dispatches projshare: sub-callbacks (step2, step3, confirm).

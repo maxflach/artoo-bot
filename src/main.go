@@ -321,7 +321,7 @@ func (b *Bot) handleCommand(chatID string, sess *Session, text string) {
 	case "help":
 		b.reply(chatID, b.helpText())
 
-	case "new":
+	case "new", "clear":
 		sess.resetSession()
 		sess.mu.Lock()
 		sess.history = nil
@@ -334,13 +334,6 @@ func (b *Bot) handleCommand(chatID string, sess *Session, text string) {
 		sess.mu.Unlock()
 		b.mem.saveUserState(sess.userID, "global", wd)
 		b.reply(chatID, "Session reset. Fresh start.")
-
-	case "clear":
-		sess.resetSession()
-		sess.mu.Lock()
-		sess.history = nil
-		sess.mu.Unlock()
-		b.reply(chatID, "Conversation history cleared.")
 
 	case "workspace", "project":
 		if args == "" || args == "list" {

@@ -304,6 +304,10 @@ func (b *Bot) buildSystemPrompt(userID, memUserID int64, workspace, workingDir s
 		systemPrompt += "\n\n## Workspace Configuration (README.md)\n\n" + readmeContent
 	}
 
+	if uploads := b.recentUploadsBlock(memUserID, workspace, workingDir); uploads != "" {
+		systemPrompt += "\n\n" + uploads
+	}
+
 	if mem := b.mem.load(memUserID, workspace, b.cfg.Memory.MaxAgeDays); mem != "" {
 		memoriesContent := strings.ReplaceAll(mem, "~", home)
 		systemPrompt += "\n\n" + memoriesContent
@@ -325,6 +329,49 @@ func (b *Bot) buildSystemPrompt(userID, memUserID int64, workspace, workingDir s
 	b.skillsMu.RUnlock()
 
 	return systemPrompt
+}
+
+// recentUploadsBlock returns a "## Recent Uploads" section listing up to 10 most-recent
+// files the user has uploaded into the working directory, so Claude knows they exist.
+// Files no longer present on disk are skipped. Returns "" when there's nothing to show.
+func (b *Bot) recentUploadsBlock(userID int64, workspace, workingDir string) string {
+	files, err := b.mem.listFilesForUser(userID, workspace)
+	if err != nil || len(files) == 0 {
+		return ""
+	}
+	const maxFiles = 10
+	var lines []string
+	for _, f := range files {
+		if len(lines) >= maxFiles {
+			break
+		}
+		base := filepath.Base(f.Path)
+		if base == "" {
+			base = f.Filename
+		}
+		path := f.Path
+		if path == "" {
+			path = filepath.Join(workingDir, base)
+		}
+		if _, statErr := os.Stat(path); statErr != nil {
+			continue
+		}
+		line := "- " + base
+		stem := strings.TrimSuffix(base, filepath.Ext(base))
+		mdCompanion := filepath.Join(filepath.Dir(path), stem+".md")
+		if base != stem+".md" {
+			if _, mdErr := os.Stat(mdCompanion); mdErr == nil {
+				line += fmt.Sprintf(" (extracted to %s.md)", stem)
+			}
+		}
+		lines = append(lines, line)
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "## Recent Uploads\n" +
+		"Files the user has uploaded into your working directory (most recent first):\n" +
+		strings.Join(lines, "\n")
 }
 
 // runClaude executes the Claude CLI with all context provided explicitly (no session access).

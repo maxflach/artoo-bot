@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.22 — 2026-04-28
+
+### Added
+- **Photo, voice, and audio uploads (Telegram)** — sending a photo, voice note, or audio file to the bot now saves it to the current project's working directory and registers it in `/files`. Photos arrive as `photo_<unix>.jpg` (Claude Code reads images natively, no extraction step), voice notes as `voice_<unix>.ogg`, audio as its original filename when provided.
+- **Recent uploads in system prompt** — the bot now appends a `## Recent Uploads` section listing up to 10 recently-uploaded files (most recent first) so the agent knows what's available in the working directory. Files no longer on disk are skipped, and an "(extracted to <name>.md)" note is added when a markdown companion exists.
+- **Telegram slash command menu** — bot now publishes a static command list to Telegram via `SetMyCommands` at startup, so the slash popup shows `/new`, `/project`, `/memory`, `/files`, `/model`, `/at`, `/schedule`, etc. with descriptions.
+
+### Changed
+- **`/clear` is now an alias of `/new`** — both commands do a full session reset (clear history + return to the global project). The previous "history-only" `/clear` behaviour is removed; the help text reflects the merge.
+
 ## v0.21 — 2026-03-25
 
 ### Added

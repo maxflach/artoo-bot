@@ -105,8 +105,7 @@ func (b *Bot) helpText() string {
 		"*%s — your personal robot assistant*\n\n"+
 			"Send any message and I'll get it done.\n\n"+
 			"*Session*\n"+
-			"/new — fresh start (clear history + reset to global)\n"+
-			"/clear — clear conversation history only\n\n"+
+			"/new (alias /clear) — fresh start (clear history + reset to global)\n\n"+
 			"*Projects*\n"+
 			"Each project is a separate context: its own directory, README, memory, files, and schedules. "+
 			"Switching projects changes what the AI knows and where it works — memories from one project don't bleed into another. "+
